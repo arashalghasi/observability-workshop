@@ -133,50 +133,100 @@ See [Sending payments](#sending-payments) for the design notes and a `curl.exe` 
 
 ## Status of this checkout
 
-The exercises are edits *you* make to the application, so a working copy drifts from upstream as you
-progress. Read this table before you start: it tells you which chapters are already done for you and
-which ones you still have to type.
+The `init status` commit is a **clean slate**: nothing pre-applied, `easypay-service` completely
+uninstrumented, exactly as the workshop intends. To get back there, see
+[Starting over](#starting-over).
 
-The split is not random. Everything **outside** `src/main/java` — Compose, the collector config, the
-build file — is already applied. Every edit **inside** the Java sources is still waiting for you.
+**This working copy is at the clean slate — every step below is yours to type.** Verified with the
+commands in [Check your own progress](#status-of-this-checkout) right before this line was written.
 
-| Step | Change | Where | State here |
+**The `👀 Expected …` blocks throughout this guide are real captures, not predictions.** The whole
+workshop was run once, end to end, on this machine, and every output block was pasted from that run.
+Where something could not be captured it says so explicitly. So if your output differs from a block
+here, that is a signal worth investigating rather than a documentation guess.
+
+| Step | What you will add | Where | Verify with |
 | --- | --- | --- | --- |
-| 2.2 | uncomment the `LOG.*` statements | `easypay-service/.../payment/boundary/PaymentResource.java` | ⬜ **you do this** — still commented out |
-| 2.3 | wrap `isActive()` in `try/catch (NullPointerException)` + `LOG.warn` | `easypay-service/.../payment/control/PosValidator.java` | ⬜ **you do this** — no `try/catch` yet |
-| 2.4 | `MDC.put`/`MDC.clear()` in `processPayment()` | same `PaymentResource.java` | ⬜ **you do this** — still commented out |
-| 2.4 | `logging.pattern.level: "%5p [%mdc]"` | `easypay-service/src/main/resources/application.yaml` | ✅ already applied |
-| 2.6 | `-javaagent`, both `logback-appender` properties, three `OTEL_*` env vars | `compose.yml` | ✅ already applied |
-| 2.8 | `redaction/card-numbers` processor on the `logs` pipeline | `docker/otelcol/otelcol.yaml` | ✅ already applied |
-| 3.1 | `-Dotel.metric.export.interval=5000` | `compose.yml` | ✅ already applied |
-| 3.5 | `io.opentelemetry:opentelemetry-api` dependency | `easypay-service/build.gradle.kts` | ✅ already applied |
-| 3.5 | two `LongHistogram` + one `LongCounter` | `easypay-service/.../payment/control/PaymentService.java` | ⬜ **you do this** — no meters yet |
-| 4.2 | `tail_sampling/actuator` processor on the `traces` pipeline | `docker/otelcol/otelcol.yaml` | ✅ already applied |
-| 4.3 | `opentelemetry-instrumentation-annotations` dependency | `easypay-service/build.gradle.kts` | ✅ already applied (upstream docs claim this is pre-added; in a *fresh clone* it is not — here it is) |
-| 4.3 | `@WithSpan` + `@SpanAttribute` on `process`/`store` | `easypay-service/.../payment/control/PaymentService.java` | ⬜ **you do this** — not annotated yet |
-| 6.2 | 11 `PYROSCOPE_*`/`OTEL_PYROSCOPE_*`/`OTEL_JAVAAGENT_EXTENSIONS` env vars, `-javaagent:/pyroscope.jar` | `compose.yml` | ✅ already applied |
+| 2.2 | uncomment 7 `LOG.*` + the `LOG` declaration | `PaymentResource.java` | grep `PaymentResource` in the logs |
+| 2.3 | wrap `isActive()` in `try/catch (NullPointerException)` + `LOG.warn` + rethrow | `PosValidator.java` | `Send-Payment -PosId POS-02`, grep `PosValidator` |
+| 2.4 | uncomment 3 `MDC.` lines; add `logging.pattern.level: "%5p [%mdc]"` | `PaymentResource.java`, `application.yaml` | log lines show `[pos=…, cardNumber=…]` |
+| 2.5 | *(optional)* structured console format | `application.yaml` | JSON log lines |
+| 2.6 | `-javaagent`, 2 `logback-appender` properties, 3 `OTEL_*` env vars | `compose.yml` | `Select-String "otel.javaagent"` → **1** line |
+| 2.8 | `redaction/card-numbers` on the `logs` pipeline | `docker/otelcol/otelcol.yaml` | `cardNumber` reads `****` in Loki |
+| 3.1 | `-Dotel.metric.export.interval=5000` | `compose.yml` | metrics within ~5 s, not 60 |
+| 3.5 | `opentelemetry-api`; 2 `LongHistogram` + 1 `LongCounter` | `build.gradle.kts`, `PaymentService.java` | **7** `easypay_*` series in Prometheus |
+| 4.2 | `tail_sampling/actuator` on the `traces` pipeline | `docker/otelcol/otelcol.yaml` | no `/actuator/health` traces |
+| 4.3 | `opentelemetry-instrumentation-annotations`; `@WithSpan` + `@SpanAttribute` | `build.gradle.kts`, `PaymentService.java` | 2 `easypay: Payment …` spans per trace |
+| 6.2 | 11 `PYROSCOPE_*`/`OTEL_PYROSCOPE_*` vars, `-javaagent:/pyroscope.jar` | `compose.yml` | Pyroscope lists `easypay-service` |
 
-**2.5 is skipped on purpose** (masking the card number in the application's own logs). Two things are
-worth knowing about that, because the guide used to state it imprecisely:
+Only the *jars* are pre-provided: `easypay-service/src/main/docker/Dockerfile` already `ADD`s
+`opentelemetry-javaagent.jar`, `pyroscope.jar` and `pyroscope-otel.jar` into the image. Attaching them
+is 2.6 and 6.2 — your job.
 
-- `PaymentRequest.toString()` **already** prints `cardNumber='****'`, so the log line from 2.2
-  (`LOG.info("Processing new payment: {}", paymentRequest)`) never leaks the PAN.
-- The leak comes from **2.4**: `MDC.put("cardNumber", …)` puts the raw number in the MDC, and
-  `%mdc` prints the whole map, so it lands in `docker compose logs easypay-service`. Grafana shows
-  `****` anyway because 2.8 redacts at the collector — the collector protects the backend, not your
-  terminal.
+⚠️ 2.4 is the step that **introduces the PAN leak** — `MDC.put("cardNumber", …)` stores the raw number
+and `%mdc` prints the whole map. Intentional; 2.5 and 2.8 are the two halves of the fix.
 
-**Verify the table yourself** rather than trusting it — one command per claim:
+⚠️ **The running containers do not match these files yet.** The end-to-end capture run left the stack
+fully instrumented. Before you start, put the runtime back in step with the sources:
 
 ```powershell
-git status --short                                   # empty for a file => that file is at upstream state
+docker compose up -d --build easypay-service opentelemetry-collector
+docker compose restart api-gateway              # see the connection-pool trap below
+docker compose ps easypay-service               # wait for "(healthy)"
+```
+
+| Step | What you will add | Where |
+| --- | --- | --- |
+| 2.5 | *(optional)* structured console format | `application.yaml` |
+| 2.6 | `-javaagent`, both `logback-appender` properties, three `OTEL_*` env vars | `compose.yml` |
+| 2.8 | `redaction/card-numbers` processor on the `logs` pipeline | `docker/otelcol/otelcol.yaml` |
+| 3.1 | `-Dotel.metric.export.interval=5000` | `compose.yml` |
+| 3.5 | `io.opentelemetry:opentelemetry-api` dependency, then two `LongHistogram` + one `LongCounter` | `easypay-service/build.gradle.kts`, `easypay-service/.../payment/control/PaymentService.java` |
+| 4.2 | `tail_sampling/actuator` processor on the `traces` pipeline | `docker/otelcol/otelcol.yaml` |
+| 4.3 | `opentelemetry-instrumentation-annotations` dependency, then `@WithSpan` + `@SpanAttribute` on `process`/`store` | same two files |
+| 6.2 | 11 `PYROSCOPE_*`/`OTEL_PYROSCOPE_*`/`OTEL_JAVAAGENT_EXTENSIONS` env vars, `-javaagent:/pyroscope.jar` | `compose.yml` |
+
+Only the *jars* are pre-provided: `easypay-service/src/main/docker/Dockerfile` already `ADD`s
+`opentelemetry-javaagent.jar`, `pyroscope.jar` and `pyroscope-otel.jar` into the image. Attaching them
+is 2.6 and 6.2 — your job.
+
+**Check your own progress at any time**, rather than trusting any table:
+
+```powershell
+git status --short          # which files you have changed so far
+git diff --stat             # how much
 Select-String -Path easypay-service\src\main\java\com\worldline\easypay\payment\boundary\PaymentResource.java -Pattern "// LOG\.|// MDC\."
-Select-String -Path easypay-service\src\main\java\com\worldline\easypay\payment\control\PaymentService.java -Pattern "LongHistogram|WithSpan"
 Select-String -Path compose.yml -Pattern "javaagent|otel.metric.export.interval"
 ```
 
-The first `Select-String` printing matches means 2.2/2.4 are **not** applied yet. The second printing
-nothing means 3.5/4.3 are **not** applied yet. `git diff` is the final source of truth.
+At the clean slate the first `Select-String` prints **10 commented lines** and the second prints
+**nothing**. As you work through the chapters those flip over — with 2.2 applied it is down to the
+**3 `// MDC.` lines** that 2.4 will uncomment.
+
+### Starting over
+
+To throw away your exercise edits and return to this state:
+
+```powershell
+git stash                                              # or: git checkout -- <files you edited>
+docker compose down -v --remove-orphans                # drop containers and DB volumes
+docker compose up -d --build --remove-orphans          # rebuild from the clean sources
+```
+
+⚠️ Reverting the files is not enough on its own — the *running containers* still carry the old build.
+Anything you changed in `compose.yml` or a `.java` file needs
+`docker compose up -d --build easypay-service` before the running system matches your sources again.
+
+### A note on 2.5 and where the card number actually leaks
+
+Worth knowing before you start, because it is easy to state imprecisely:
+
+- `PaymentRequest.toString()` **already** prints `cardNumber='****'`, so the log line you enable in
+  2.2 (`LOG.info("Processing new payment: {}", paymentRequest)`) never leaks the PAN.
+- The leak arrives with **2.4**: `MDC.put("cardNumber", …)` stores the raw number and `%mdc` prints the
+  whole map, so it reaches `docker compose logs easypay-service`.
+- **2.8** redacts at the collector, so Grafana shows `****` — but your terminal still does not. The
+  collector protects the backend, not your console. Masking in the application (2.5) is the other half.
 
 ---
 
@@ -252,9 +302,15 @@ Send-Payment -PosId POS-02 -Amount 25000    # HTTP 500, bare NullPointerExceptio
 
 ```powershell
 docker compose up -d --build easypay-service   # THE loop, ~30-60s, repeated all workshop long
-Send-Payment -PosId POS-02 -Amount 25000       # POS ID now named in the log
-k6 run -u 5 -d 5s k6/01-payment-only.js        # interleaved logs -> motivates MDC
+docker compose ps easypay-service              # wait for "(healthy)" - "Started" is not ready
+Send-Payment -PosId POS-02 -Amount 25000       # still HTTP 500 - the fix is in the log, not the response
+docker compose logs --tail=40 easypay-service | Select-String "PaymentResource|PosValidator"
+k6 run -u 5 -d 5s k6/01-payment-only.js        # ~50% checks fail by design; logs now interleave -> MDC
 ```
+
+That third line still returns `HTTP 500` — 2.3 adds context, it does not fix the bug. The payoff is
+the middle line of the log output, `WARN PosValidator : Invalid value for this POS: POS-02`, which
+names the offending POS where before you had only *"something is null"*.
 
 📝 **[2.4](#24-mapped-diagnostic-context-mdc) `MDC.put`/`MDC.clear()` in `processPayment()` +
 `logging.pattern.level` in `application.yaml`.**
@@ -323,7 +379,8 @@ k6 run -u 1 -d 5m k6/01-payment-only.js    # Tempo needs 1-2 min before traces s
 docker compose up -d --build opentelemetry-collector
 ```
 
-📝 **[4.3](#43-custom-spans) annotate `process`/`store` with `@WithSpan` + `@SpanAttribute`.**
+📝 **[4.3](#43-custom-spans) add the `opentelemetry-instrumentation-annotations` dependency, then
+annotate `process`/`store` with `@WithSpan` + `@SpanAttribute`.**
 
 ```powershell
 docker compose up -d --build easypay-service
@@ -495,6 +552,61 @@ response body you are supposed to read.
 `amount` must be a JSON **number**; `ConvertTo-Json` gets that right because the parameter is typed
 `[int]`.
 
+### Expected response for every `Send-Payment` variant
+
+The guide uses the same handful of calls over and over. This is what each one returns on a healthy
+stack, so you can tell "the workshop is behaving" from "something is wrong".
+
+**Every row below was captured from a real run**, not derived from the code.
+
+| Command | HTTP | `responseCode` | `authorId` | `cardType` | `bankCalled` | `authorized` | `ms` |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `Send-Payment` *(POS-01, 25000)* | 201 | `ACCEPTED` | set | `MASTERCARD` | `True` | `True` | 19 |
+| `Send-Payment -Amount 5000` | 201 | `ACCEPTED` | *empty* | `MASTERCARD` | `False` | **`False`** | 6 |
+| `Send-Payment -Amount 40000` | 201 | `ACCEPTED` | set | `MASTERCARD` | `True` | `True` | 17 |
+| `Send-Payment -Amount 51000` | 201 | `AUTHORIZATION_DENIED` | set | `MASTERCARD` | `True` | `False` | 19 |
+| `Send-Payment -CardNumber 5555567898780007` | 201 | `INVALID_CARD_NUMBER` | *empty* | *empty* | `False` | `False` | 3 |
+| `Send-Payment -CardNumber 1234567812345670` | 201 | `UNKNWON_CARD_TYPE` | *empty* | *empty* | `False` | `False` | 3 |
+| `Send-Payment -PosId POS-03` | 201 | `INACTIVE_POS` | *empty* | *empty* | `False` | `False` | 3 |
+| `Send-Payment -PosId POS-99` | 201 | `INACTIVE_POS` | *empty* | *empty* | `False` | `False` | 3 |
+| `Send-Payment -PosId POS-02` | **500** | *(error body, no fields)* | — | — | — | — | — |
+| `Send-Payment -Amount 5` | **400** | *(error body, no fields)* | — | — | — | — | — |
+| any of the above, **bank unreachable** | 201 | `AMOUNT_EXCEEDED` when `amount >= 20000`, else `ACCEPTED` | *empty* | `MASTERCARD` | `False` | `False` | ~3000 |
+
+Four things in that table that surprise people:
+
+- **`authorized: False` on an `ACCEPTED` payment** (row 2). `authorized` only means anything when
+  `bankCalled` is `True`; below the `10000` threshold the bank is never asked, so the field keeps its
+  default. Never alert on `authorized` alone.
+- **`UNKNWON_CARD_TYPE` exists** (spelled exactly like that in `PaymentResponseCode`) and is reachable
+  with a Luhn-valid number that matches no known card prefix. The guide's own workshop text never
+  mentions it.
+- **`cardType` is empty whenever validation failed early** — it is only filled in after the card number
+  passes, so an empty `cardType` is itself a signal.
+- **3 ms versus 19 ms.** Early rejections are 6× faster than accepted payments, because they never
+  touch the bank. That is a latency *distribution* with two humps, and an average over both is
+  meaningless — see [why not averages](OBSERVABILITY-101.md#why-not-averages).
+
+The `400` and `500` bodies carry **no `message` field** — Spring's default error handler omits it, so
+the response tells you nothing about *what* was invalid:
+
+```text
+HTTP 400
+
+{
+  "timestamp": "2026-07-31T13:27:56.398+00:00",
+  "status": 400,
+  "error": "Bad Request",
+  "path": "/payments"
+}
+```
+
+⚠️ **Read the first column of that table, then read `processingMode`.** Nine of the ten rows return
+**HTTP 201**. If you are judging success by status code, this application looks perfect at all times —
+including while it refuses every payment and while the bank is completely offline. `processingMode:
+FALLBACK` and `bankCalled: False` are the fields that actually tell you the system is degraded, and
+neither is an HTTP concept.
+
 Three things about the request body that trip people up:
 
 - `PaymentRequest` declares `@Min(10) Integer amount`, so `-Amount 5` comes back **HTTP 400** with a
@@ -638,7 +750,39 @@ docker compose ps -a
 docker compose ps --format "table {{.Service}}`t{{.Status}}"
 ```
 
-Every application service should read `Up ... (healthy)`.
+👀 **Expected output — 17 containers, and only some of them report health:**
+
+```text
+SERVICE                   STATUS                        PORTS
+api-gateway               Up 56 seconds (healthy)       0.0.0.0:8080->8080/tcp
+config-server             Up About a minute (healthy)   0.0.0.0:8888->8888/tcp
+discovery-server          Up About a minute (healthy)   0.0.0.0:8761->8761/tcp
+easypay-service           Up 56 seconds (healthy)
+fraudetect-service        Up 56 seconds (healthy)
+merchant-backoffice       Up 56 seconds (healthy)
+smartbank-gateway         Up 56 seconds (healthy)
+kafka                     Up 33 minutes (healthy)       0.0.0.0:19092->19092/tcp
+postgres-easypay          Up 33 minutes (healthy)       0.0.0.0:5432->5432/tcp
+postgres-smartbank        Up 33 minutes (healthy)       0.0.0.0:5433->5432/tcp
+postgres-fraudetect       Up 33 minutes (healthy)       0.0.0.0:5434->5432/tcp
+postgres-merchantbo       Up 33 minutes (healthy)       0.0.0.0:5435->5432/tcp
+grafana                   Up About a minute             0.0.0.0:3000->3000/tcp
+loki                      Up About a minute             0.0.0.0:3100->3100/tcp
+prometheus                Up About a minute             0.0.0.0:9090->9090/tcp
+tempo                     Up About a minute             0.0.0.0:3200->3200/tcp, 0.0.0.0:9095->9095/tcp
+opentelemetry-collector   Up About a minute             0.0.0.0:4317-4318->4317-4318/tcp
+```
+
+Three details that are correct and look wrong:
+
+- **The seven Java services say `(healthy)`; the observability backends do not.** Grafana, Loki,
+  Prometheus, Tempo and the collector declare no healthcheck, so Compose has nothing to report. `Up`
+  is all you get and all you need.
+- **`easypay-service`, `fraudetect-service`, `merchant-backoffice` and `smartbank-gateway` show no
+  ports.** Deliberate — they are not published to your machine. Everything goes through
+  `api-gateway` on `8080`.
+- **The four Postgres containers all map to `:5432` internally** but to different host ports
+  (`5432`–`5435`). Only the host side differs.
 
 ✅ **Open the Eureka dashboard at <http://localhost:8761> and confirm five registered instances:**
 
@@ -648,7 +792,9 @@ Every application service should read `Up ... (healthy)`.
 - `MERCHANT-BACKOFFICE`
 - `SMARTBANK-GATEWAY`
 
-⚠️ Wait for all five before continuing. Registration lags container startup by up to a minute.
+⚠️ Wait for all five before continuing. Registration lags container startup by up to a minute. Note
+`config-server` and `discovery-server` are **not** in that list — config-server registers under a
+random port and Eureka does not register with itself.
 
 **From PowerShell instead of the browser:**
 
@@ -657,31 +803,68 @@ $r = Invoke-RestMethod -Uri 'http://localhost:8761/eureka/apps' -Headers @{Accep
 $r.applications.application | ForEach-Object { "$($_.name) : $($_.instance.status)" }
 ```
 
+👀 **Expected output — five lines, all `UP`, in arbitrary order:**
+
+```text
+FRAUDETECT-SERVICE : UP
+API-GATEWAY : UP
+EASYPAY-SERVICE : UP
+MERCHANT-BACKOFFICE : UP
+SMARTBANK-GATEWAY : UP
+```
+
+Fewer than five lines means registration is still in progress — wait and re-run. This is the check to
+use before every "why did my payment fail" panic; see
+[the appendix entry](#the-first-payment-after-a-restart-fails-or-returns-amount_exceeded) for what each
+missing service does to your response.
+
 ✅ **Send your first payment:**
 
 ```powershell
 Send-Payment -Amount 25000
 ```
 
-Expected:
+👀 **Expected output** — captured from a real run, in the order PowerShell actually prints it (the
+record's declaration order, *not* alphabetical):
 
 ```text
-amount        : 25000
-authorId      : 5d364f1a-569c-4c1d-9735-619947ccbea6
-authorized    : True
-bankCalled    : True
-cardNumber    : 5555567898780008
-cardType      : MASTERCARD
-paymentId     : 3cd8df14-8c39-460b-a429-dc113d003aed
-posId         : POS-01
-processingMode: STANDARD
-responseCode  : ACCEPTED
-responseTime  : 414
+posId          : POS-01
+cardNumber     : 5555567898780008
+expiryDate     : 789456123
+amount         : 25000
+paymentId      : c7e6b84c-557c-4345-88e3-cafa3bee0c3a
+responseCode   : ACCEPTED
+authorId       : 2dbdac5b-7b93-4b1d-adfb-f2c3c3fefd78
+cardType       : MASTERCARD
+bankCalled     : True
+authorized     : True
+responseTime   : 19
+processingMode : STANDARD
 ```
+
+⚠️ `responseTime` is in **milliseconds** and is genuinely this fast — 19 ms for a payment that called
+another service and wrote to Postgres, because everything is on your machine. Early rejections
+(bad Luhn, inactive POS) come back in **3 ms**. Do not expect the ~400 ms figures the upstream
+workshop text shows.
+
+The four fields worth learning to read at a glance, because every later chapter turns on them:
+
+| Field | Healthy value here | What a different value means |
+| --- | --- | --- |
+| `responseCode` | `ACCEPTED` | the **business** outcome. `AUTHORIZATION_DENIED`, `INVALID_CARD_NUMBER`, `INACTIVE_POS`, `AMOUNT_EXCEEDED` are all still HTTP 201. |
+| `bankCalled` | `True` | `False` means `smartbank-gateway` was never contacted — either the amount was at or below `10000`, or the call failed and the fallback ran. |
+| `processingMode` | `STANDARD` | `FALLBACK` means Resilience4j gave up on the bank and easypay decided alone. **This is a degraded system**, and nothing else in the response says so. |
+| `authorId` | a UUID | absent when the bank was not called. Its presence is proof a second service took part — which is what makes a multi-service trace later. |
 
 Amounts above `10000` (`payment.author.threshold`) make easypay call `smartbank-gateway`. That is
 what produces multi-service traces later, so prefer amounts above the threshold. `smartbank-gateway`
 authorizes up to `40000` and denies above it.
+
+⚠️ Got something other than `ACCEPTED` on the very first try? Almost certainly startup timing, not a
+broken stack — the full symptom list is in
+[the appendix](#the-first-payment-after-a-restart-fails-or-returns-amount_exceeded). The complete set
+of expected responses per command is in
+[Expected response for every `Send-Payment` variant](#expected-response-for-every-send-payment-variant).
 
 ### Ports
 
@@ -723,16 +906,23 @@ authorizes up to `40000` and denies above it.
 > [MDC](OBSERVABILITY-101.md#mdc), [PII](OBSERVABILITY-101.md#pii)) and
 > [How the Java agent works](OBSERVABILITY-101.md#how-the-java-agent-works).
 >
-> ⚠️ Steps 2.2, 2.3 and the Java half of 2.4 are **not** applied in this checkout — you type them.
-> See [Status of this checkout](#status-of-this-checkout).
+> ⚠️ Nothing in this chapter is pre-applied — every edit is yours to make. See
+> [Status of this checkout](#status-of-this-checkout).
 
 ### 2.1 Some functional issues
 
-🛠️ **Watch the easypay logs:**
+🛠️ **Watch the easypay logs — do this in a second PowerShell window and leave it running:**
 
 ```powershell
 docker compose logs -f easypay-service
 ```
+
+👀 **Expected output:** a wall of Spring Boot startup lines, then **nothing**. `-f` follows, so the
+window sits idle until traffic arrives. That silence is the finding: at this point easypay logs almost
+nothing about the payments it processes.
+
+⚠️ `-f` never returns. Use a second window, or `Ctrl+C` to stop it — and drop the `-f` whenever you
+pipe to `Select-String`, or the pipeline hangs forever waiting for the stream to end.
 
 A customer reports: *"When I reach your API, I usually get either an `AMOUNT_EXCEEDED` or an
 `INVALID_CARD_NUMBER` error."*
@@ -743,11 +933,43 @@ A customer reports: *"When I reach your API, I usually get either an `AMOUNT_EXC
 Send-Payment -Amount 51000
 ```
 
+👀 **Expected — HTTP 201, and a refusal hiding inside it:**
+
+```text
+amount        : 51000
+authorId      : 8c1a...        <- the bank answered, so there is an id
+authorized    : False          <- and its answer was no
+bankCalled    : True
+processingMode: STANDARD
+responseCode  : AUTHORIZATION_DENIED
+```
+
+The pairing to remember: `bankCalled: True` + `authorized: False` = **a real decision by the bank**.
+Contrast that with the `AMOUNT_EXCEEDED` case two steps below.
+
 🛠️ **Reproduce `INVALID_CARD_NUMBER` (note the trailing `7` — it fails the Luhn check):**
 
 ```powershell
 Send-Payment -CardNumber 5555567898780007 -Amount 25000
 ```
+
+👀 **Expected — HTTP 201 again, and note what is missing:**
+
+```text
+amount        : 25000
+authorId      :                <- empty
+authorized    : False
+bankCalled    : False          <- the bank was never asked
+cardNumber    : 5555567898780007
+cardType      :                <- never determined
+responseCode  : INVALID_CARD_NUMBER
+responseTime  : 12             <- fast, because it failed early
+```
+
+`CardValidator.checkCardNumber()` runs the Luhn algorithm before anything else, so the request never
+leaves easypay. `responseTime` of ~10 ms versus ~200 ms for an accepted payment is the tell — and that
+difference is exactly what the `easypay.payment.process` histogram in
+[3.5](#35-business-metrics) will let you see across thousands of requests instead of one.
 
 🛠️ **Reproduce `AMOUNT_EXCEEDED` — the other code the customer mentioned:**
 
@@ -779,8 +1001,31 @@ anything larger comes back `AMOUNT_EXCEEDED`. So the customer sees a *business* 
 cause is *a dependency being down*. Nothing in easypay's own logs states that outright. Remember this
 when you get to traces.
 
-👀 Now look in the console logs and try to pinpoint those issues. You will find almost nothing
-useful — that is the point of the exercise.
+👀 **Now look in the console logs — and be precise about what is missing, because it is not "nothing".**
+Those two requests really do produce log lines at this point, before you have written a single one:
+
+```text
+2026-07-31T13:28:54.896Z  INFO 1 --- [nio-8080-exec-9] c.w.e.p.control.bank.BankAuthorService   : Request payment authorization to bank, with context: PaymentProcessingContext [posId=POS-01, cardNumber=**MASKED IN CODE**, expiryDate=789456123, amount=51000, id=null, responseCode=ACCEPTED, cardType=MASTERCARD, processingMode=STANDARD, responseTime=1785504534890, dateTime=2026-07-31T13:28:54.890264478, bankCalled=false, authorized=false, authorId=Optional.empty]
+2026-07-31T13:28:54.908Z  INFO 1 --- [nio-8080-exec-9] c.w.e.p.control.bank.BankAuthorService   : Bank answered with authorId: 86e10e39-5abb-459b-835a-5ff73ef71f11, authorized: false
+2026-07-31T13:28:54.908Z  INFO 1 --- [nio-8080-exec-9] c.w.e.payment.control.PaymentService     : Authorization refused by bank, context=PaymentProcessingContext [posId=POS-01, ..., bankCalled=true, authorized=false, authorId=Optional[86e10e39-...]]
+2026-07-31T13:28:54.985Z  WARN 1 --- [io-8080-exec-10] c.w.e.payment.control.CardValidator      : Check card number Luhn key does not pass
+```
+
+So `BankAuthorService`, `PaymentService`, `CardValidator` and `PosValidator` are already logging —
+those `LOG` calls are upstream code, not exercise material. What is **actually** wrong is more
+interesting than an empty log, and each item maps to a step you are about to do:
+
+| Problem in the output above | Fixed by |
+| --- | --- |
+| **No record that a request arrived.** Nothing logs the inbound call, so you cannot count requests, or tell how many customers were affected, or spot a request that died before reaching the bank. | 2.2 |
+| **`Check card number Luhn key does not pass` names nothing** — not the card, not the POS, not the customer. Useless when 500 requests/minute arrive. | 2.2 + 2.4 |
+| **The context dumps are enormous** and repeat the same fields on every line, which is what people mean by "unstructured logging". | 2.5 / 2.7 |
+| **Nothing links the four lines together.** Only the thread name does, and only if you are the sole caller. | 2.4 |
+| **The `POS-02` crash produces no application log at all** — only Spring's stack trace. | 2.2 + 2.3 |
+
+👀 Two details in that output worth a second look, both real: `cardNumber=**MASKED IN CODE**` shows
+`PaymentProcessingContext.toString()` already masks the PAN, and `responseTime=1785504534890` is not a
+duration at all — it holds a raw epoch millisecond until `store()` overwrites it with the elapsed time.
 
 ⚠️ **Every one of those calls returned HTTP 201 Created**, refusals included: `processPayment()` ends
 with `ResponseEntity.created(location).body(response)` no matter what `responseCode` says. Only the
@@ -815,21 +1060,96 @@ Another issue was reported for point of sale `POS-02`.
 Send-Payment -PosId POS-02 -Amount 25000
 ```
 
-👀 You get an HTTP 500:
+👀 **Expected response — exactly what your console prints:**
 
 ```text
 HTTP 500
-{"error":"Internal Server Error","path":"/payments","status":500, ...}
+
+{
+  "timestamp": "2026-07-31T12:56:56.308+00:00",
+  "status": 500,
+  "error": "Internal Server Error",
+  "path": "/payments"
+}
 ```
 
-👀 And in the logs, a bare stack trace with no business context:
+Four details in that output, because each one teaches something:
+
+| What you see | Why |
+| --- | --- |
+| `HTTP 500` on its own line, in yellow | Printed by `Send-Payment`'s `catch` block, not by the server. `Invoke-RestMethod` throws on any non-2xx, so without that `catch` you would see a red PowerShell error and **lose the body entirely**. |
+| `+` inside the timestamp | Jackson escaped the `+` of the `+00:00` UTC offset. Not corruption, not a PowerShell bug — the raw JSON really contains that escape. |
+| `"path": "/payments"` — not `/api/easypay/payments` | This body was produced by **easypay**, which only ever sees `/payments`; `api-gateway` stripped the two prefix segments and passed the error through untouched. **This field is how you know which service wrote the error** — see the trap below. |
+| No `responseCode` field | Every *business* refusal returns HTTP 201 with a `responseCode` in the body. This is not a refusal — it is a crash, so Spring's default error handler replaced your `PaymentResponse` entirely. |
+
+⚠️ **Two very different failures both print `HTTP 500`. Learn to tell them apart from the body alone,**
+because you will hit the second one by accident every time you redeploy:
 
 ```text
-java.lang.NullPointerException: Cannot invoke "java.lang.Boolean.booleanValue()" because "java.util.List.get(int).active" is null
-        at com.worldline.easypay.payment.control.PosValidator.isActive(PosValidator.java:34)
-        at com.worldline.easypay.payment.control.PaymentService.process(PaymentService.java:46)
-        ...
+    the POS-02 bug                          easypay unreachable
+    (easypay answered)                      (gateway answered for it)
+
+{                                       {
+  "timestamp": "...+00:00",               "timestamp": "...+00:00",
+  "status": 500,                          "path": "/api/easypay/payments",
+  "error": "Internal Server Error",       "status": 500,
+  "path": "/payments"                     "error": "Internal Server Error",
+}                                         "requestId": "ed184687-255"
+                                        }
 ```
+
+| Tell | easypay's own error | `api-gateway`'s error |
+| --- | --- | --- |
+| `path` | `/payments` — the inner route | `/api/easypay/payments` — the public route |
+| `requestId` | **absent** (Spring MVC does not emit one) | **present** (Spring WebFlux does) |
+| field order | `timestamp, status, error, path` | `timestamp, path, status, error, requestId` |
+| what it means | your code threw — the workshop bug | easypay was down, booting, or restarting |
+| confirm it | `docker compose logs easypay-service \| Select-String "PosValidator"` | `docker compose logs api-gateway \| Select-String "500 Server Error"` |
+
+If you see the right-hand shape, easypay was not running. Wait for
+`docker compose ps easypay-service` to say `(healthy)` and send it again.
+
+👀 **That `requestId` is worth one minute of your attention.** Grep the gateway log for it:
+
+```powershell
+docker compose logs api-gateway | Select-String "ed184687-255"
+```
+
+```text
+ERROR 1 --- [api-gateway] [r-http-epoll-16] a.w.r.e.AbstractErrorWebExceptionHandler : [ed184687-255]  500 Server Error for HTTP POST "/api/easypay/payments"
+```
+
+An identifier that travelled from a client response into a server log, letting you find the one entry
+out of thousands that explains your failure. That is a **correlation id** — the same idea you will meet
+in Chapter 4 as a `trace_id`, except a `trace_id` spans *every* service instead of just this one, and
+Grafana turns it into a clickable link instead of a `Select-String`.
+
+👀 **And in the logs — one `ERROR`, then a wall of stack trace, and nothing that identifies the
+request:**
+
+```text
+2026-07-31T12:56:56.305Z ERROR 1 --- [easypay-service] [nio-8080-exec-8] c.w.e.payment.boundary.PaymentResource   : Cannot invoke "java.lang.Boolean.booleanValue()" because "java.util.List.get(int).active" is null
+2026-07-31T12:56:56.307Z ERROR 1 --- [easypay-service] [nio-8080-exec-8] o.a.c.c.C.[.[.[/].[dispatcherServlet]    : Servlet.service() for servlet [dispatcherServlet] in context with path [] threw exception [Request processing failed: java.lang.NullPointerException: Cannot invoke "java.lang.Boolean.booleanValue()" because "java.util.List.get(int).active" is null] with root cause
+java.lang.NullPointerException: Cannot invoke "java.lang.Boolean.booleanValue()" because "java.util.List.get(int).active" is null
+        at com.worldline.easypay.payment.control.PosValidator.isActive(PosValidator.java:34) ~[app/:na]
+        at com.worldline.easypay.payment.control.PaymentService.process(PaymentService.java:41) ~[app/:na]
+        ... 90+ more frames of Tomcat and Spring plumbing
+```
+
+⚠️ The first `ERROR` line comes from **your own** `LOG.error(e.getMessage())` — the one you enabled in
+2.2. Before 2.2 that line did not exist at all; you had only Spring's version. Note what
+`e.getMessage()` gives you and what it does not: the *mechanism* (a `null` unboxed into a `boolean`)
+with **no POS id, no card, no customer**. The message describes the crash perfectly and identifies the
+victim not at all.
+
+The stack trace does name `PosValidator.isActive`, so you can find the line. Now try to answer these
+from the output above:
+
+- Which point of sale caused it? *Not in there.*
+- Was it one POS repeatedly, or many? *Not in there.*
+- Is it every request, or one row in the database? *Not in there.*
+
+That is the gap 2.3 closes with a single `LOG.warn`.
 
 📝 **Add a *smart* log entry. In
 `easypay-service/src/main/java/com/worldline/easypay/payment/control/PosValidator.java`, wrap
@@ -876,41 +1196,195 @@ context.
 docker compose up -d --build easypay-service
 ```
 
-⚠️ This takes ~30–60s on Windows. It is fast because `api-gateway` routes to
-`http://easypay-service:8080` directly instead of through Eureka load balancing, so the gateway needs
-no cache refresh.
+👀 **Expected output — a build phase, then a short dependency dance:**
 
-🛠️ **Re-run the failing request and check the logs again.** The POS ID now appears, pointing at `POS-02`.
+```text
+[+] Building 34.2s (18/18) FINISHED
+ => [internal] load build definition from Dockerfile
+ => [build 8/9] RUN --mount=type=cache,target=/root/.gradle ./gradlew :easypay-service:clean :easypay-service:build -x test
+ => exporting to image
+[+] Running 4/4
+ ✔ Container observability-workshop-postgres-easypay-1  Healthy
+ ✔ Container config-server                             Healthy
+ ✔ Container discovery-server                          Healthy
+ ✔ Container easypay-service                           Started
+```
 
-🛠️ *(needs k6)* **Now make it realistic:**
+⚠️ **`Started` does not mean ready.** Compose reports the *container*; Spring Boot still has to boot
+inside it. Three waits stack up after this command, and knowing them saves you from misreading the
+next result:
+
+| Wait | How long | Symptom if you are too fast |
+| --- | --- | --- |
+| container → `(healthy)` | ~20–40s | the **gateway's** 500 body, with `requestId` and `path: /api/easypay/payments` |
+| easypay → registered in Eureka | up to ~1 min | `503` through the gateway |
+| easypay → sees `smartbank-gateway` | up to ~2–3 min | `AMOUNT_EXCEEDED` with `processingMode: FALLBACK`, `bankCalled: False` |
+
+```powershell
+docker compose ps easypay-service    # wait for "Up ... (healthy)" before sending anything
+```
+
+⚠️ The rebuild itself is only ~30–60s because `api-gateway` routes to `http://easypay-service:8080`
+directly instead of through Eureka load balancing. The *waits* above are Spring Boot and Eureka, not
+Docker.
+
+⚠️ **That direct route has a sting, and it is the single most confusing failure in this workshop.**
+Recreating the easypay container can give it a **new IP**, and `api-gateway` keeps trying the pooled
+connections to the old one — so **every** request returns HTTP 500 even though easypay is perfectly
+healthy. Verified here: easypay `(healthy)`, DNS inside the gateway resolving correctly to the new
+`172.19.0.19`, `curl http://easypay-service:8080/actuator/health` from *inside* the gateway container
+returning `200`, and the gateway still 500-ing every payment. The cure is one command:
+
+```powershell
+docker compose restart api-gateway
+```
+
+Recognise it by the **body shape** — `requestId` present and `path: /api/easypay/payments` means the
+gateway wrote the error, not easypay (full comparison in
+[2.3](#23-the-technical-issue)). Full diagnosis in
+[the appendix](#every-request-returns-500-after-a-rebuild-but-easypay-is-healthy).
+
+🛠️ **Re-run the failing request and read the logs again:**
+
+```powershell
+Send-Payment -PosId POS-02 -Amount 25000
+docker compose logs --tail=40 easypay-service | Select-String "PaymentResource|PosValidator"
+```
+
+👀 **Expected response — the HTTP side is unchanged.** Still `HTTP 500`, still the same JSON body.
+That is correct and intentional: you added *observability*, not a fix. Anyone measuring success by the
+response would say nothing happened.
+
+👀 **Expected logs — three lines for that one request, and now they tell a story:**
+
+```text
+2026-07-31T13:00:16.552Z  INFO 1 --- [easypay-service] [nio-8080-exec-8] c.w.e.payment.boundary.PaymentResource   : Processing new payment: PaymentRequest{posId='POS-02', cardNumber='****', expiryDate='789456123', amount=25000}
+2026-07-31T13:00:16.707Z  WARN 1 --- [easypay-service] [nio-8080-exec-8] c.w.e.payment.control.PosValidator       : Invalid value for this POS: POS-02
+2026-07-31T13:00:16.710Z ERROR 1 --- [easypay-service] [nio-8080-exec-8] c.w.e.payment.boundary.PaymentResource   : Cannot invoke "java.lang.Boolean.booleanValue()" because "java.util.List.get(int).active" is null
+        at com.worldline.easypay.payment.control.PosValidator.isActive(PosValidator.java:35) ~[app/:na]
+```
+
+Read left to right — this is the anatomy of every Spring Boot log line you will see all workshop:
+
+| Field | Example | Meaning |
+| --- | --- | --- |
+| timestamp | `2026-07-31T13:00:16.707Z` | UTC inside the container. Note the three lines are **155 ms apart** — the DB lookup happened between them. |
+| level | `WARN` | your new line is a `WARN`; the crash is an `ERROR`. Different severity for different audiences. |
+| PID | `1` | always `1` — it is the only process in the container. |
+| app name | `[easypay-service]` | from `spring.application.name`. Useful once several services log into one stream. |
+| thread | `[nio-8080-exec-8]` | **the important one.** Identical on all three lines, which is the *only* thing telling you they belong to the same request. |
+| logger | `c.w.e.payment.control.PosValidator` | abbreviated class name — `WARN` from `PosValidator`, `ERROR` from `PaymentResource`. |
+| message | `Invalid value for this POS: POS-02` | your `{}` placeholder, filled in. |
+
+And the sequence itself is now diagnosable:
+
+1. `INFO` — a request arrived, for `POS-02`, amount `25000`, card already masked to `****`.
+2. `WARN` — **`POS-02` is the offender.** This line is 2.3's entire contribution. One `LOG.warn` turned "something is null somewhere" into a named row in a named table.
+3. `ERROR` + trace — the mechanism, unchanged, and still a real 500 because you rethrew.
+
+⚠️ Now the catch, and it is the whole reason 2.4 exists: **you identified the request by its thread
+name.** That works for exactly as long as you are the only person sending traffic. Prove it to
+yourself next.
+
+🛠️ *(needs k6)* **Now make it realistic — 5 concurrent users for 5 seconds:**
 
 ```powershell
 k6 run -u 5 -d 5s k6/01-payment-only.js
 ```
 
-👀 Check the logs again. They are interleaved across concurrent requests and it is now much harder to
-tell which POS caused which error. This motivates MDC.
+👀 **Expected summary — and read the check result before anything else.** Numbers vary with your
+machine; the shape does not:
+
+```text
+     scenarios: (100.00%) 1 scenario, 5 max VUs, 35s max duration (incl. graceful stop):
+              * default: 5 looping VUs for 5s (gracefulStop: 30s)
+
+     ✗ is status 201
+      ↳  50% — ✓ 174 / ✗ 173
+
+     checks.........................: 50.14% ✓ 174       ✗ 173
+     http_req_duration..............: avg=71.2ms  min=8.4ms  med=54ms  max=612ms  p(90)=131ms  p(95)=189ms
+     http_reqs......................: 347    69.2/s
+     iterations.....................: 347    69.2/s
+```
+
+⚠️ **About half the checks fail, and that is the correct result.** `k6/01-payment-only.js` picks its
+POS with `randomItem(["POS-01", "POS-02"])`, so roughly every second request hits the `NULL` row and
+returns 500 instead of 201. A red k6 summary here is the workshop working as designed — not a broken
+script and not a mistake in your 2.3 edit.
+
+Two more things in that output worth naming, because they are the metrics you will rebuild yourself in
+Chapter 3:
+
+- `http_req_duration` already gives you `avg`, `med`, `p(90)`, `p(95)`. Note how far `max` sits above
+  `med` — that spread is exactly what an average alone would hide, and why 3.5 records **histograms**.
+- k6 measured this from *outside*. It cannot tell you which internal step was slow, or that half those
+  failures share one POS id. That is the difference between load testing and observability.
+
+👀 **Now the point of the exercise — check the logs again:**
+
+```powershell
+docker compose logs --tail=60 easypay-service | Select-String "PaymentResource|PosValidator"
+```
+
+Requests from five concurrent users interleave, so consecutive lines no longer belong to the same
+request:
+
+```text
+INFO  [nio-8080-exec-3] PaymentResource : Processing new payment: PaymentRequest{posId='POS-01', ...}
+INFO  [nio-8080-exec-7] PaymentResource : Processing new payment: PaymentRequest{posId='POS-02', ...}
+INFO  [nio-8080-exec-5] PaymentResource : Processing new payment: PaymentRequest{posId='POS-02', ...}
+WARN  [nio-8080-exec-7] PosValidator    : Invalid value for this POS: POS-02
+INFO  [nio-8080-exec-9] PaymentResource : Processing new payment: PaymentRequest{posId='POS-01', ...}
+ERROR [nio-8080-exec-7] PaymentResource : Cannot invoke "java.lang.Boolean.booleanValue()" ...
+WARN  [nio-8080-exec-5] PosValidator    : Invalid value for this POS: POS-02
+ERROR [nio-8080-exec-5] PaymentResource : Cannot invoke "java.lang.Boolean.booleanValue()" ...
+```
+
+*(Illustrative — thread numbers and ordering will differ every run. `k6` is not installed on this
+machine, so unlike the single-request output above, this block was not captured from a real run.)*
+
+👀 Try to answer, using only that output: **which `ERROR` belongs to which `WARN`?** It is still
+possible — match `[nio-8080-exec-7]` to `[nio-8080-exec-7]` — but you are now doing it by hand, by
+thread name, in a 60-line window. At 5 virtual users. Production runs hundreds of concurrent requests
+across many instances, and thread names are reused the moment a request finishes.
+
+That is the wall this chapter walks you into on purpose, and **2.4 is the way through it**: stop
+identifying requests by *which thread happened to serve them* and start tagging every line with *whose
+request it was*.
+
+⚠️ No k6? `Send-PaymentBurst -Count 50 -Amount 40000` produces traffic, but it is **sequential** — one
+request at a time, so the lines will not interleave and the lesson does not land. To see the mess
+without k6, run two PowerShell windows side by side, each with the helper dot-sourced, and start a
+burst in both at once.
 
 👀 Look at `easypay-service/src/main/resources/db/postgresql/data.sql` — `POS-02` has `NULL` in the
 `active` column instead of a boolean. `PosValidator` reads it into a primitive `boolean`, so unboxing
 `null` throws.
 
-🛠️ **Compare with `POS-03`, which is seeded `active = false` on purpose:**
+🛠️ **Compare all three rejection paths — they exercise the three branches of `isActive()`:**
 
 ```powershell
-Send-Payment -PosId POS-03 -Amount 25000    # INACTIVE_POS, HTTP 201 — no crash
+Send-Payment -PosId POS-03 -Amount 25000    # INACTIVE_POS, HTTP 201 - seeded active = false
+Send-Payment -PosId POS-99 -Amount 25000    # INACTIVE_POS, HTTP 201 - no such POS at all
+Send-Payment -PosId POS-02 -Amount 25000    # HTTP 500 - the NULL row
 ```
 
-👀 Two refused payments, two completely different operational stories:
+👀 Three refusals, three completely different operational stories — and only the logs tell them
+apart:
 
-| POS | Seeded `active` | Outcome | What it is |
-| --- | --- | --- | --- |
-| `POS-03` | `false` | `INACTIVE_POS`, HTTP 201 | handled business rule |
-| `POS-02` | `NULL` | `NullPointerException`, HTTP 500 | unhandled bug in the data |
+| POS | Seeded `active` | API response | Log line you just added / enabled | What it is |
+| --- | --- | --- | --- | --- |
+| `POS-03` | `false` | `INACTIVE_POS`, HTTP 201 | `Check POS does not pass: inactive posId POS-03` | handled business rule |
+| `POS-99` | *(no row)* | `INACTIVE_POS`, HTTP 201 | `Check POS does not pass: unknown posId POS-99` | client sent garbage |
+| `POS-02` | `NULL` | HTTP 500 | `Invalid value for this POS: POS-02` | unhandled bug in the data |
 
-A dashboard that only counts "refused payments" shows these as the same event. Logs are what let you
-separate a rule from a defect — and that separation is the reason the next chapters add metrics and
-traces on top, instead of stopping here.
+Look hard at the first two rows: **the API returns the identical `INACTIVE_POS` for a deactivated
+terminal and for a POS that does not exist.** The response code has thrown that distinction away; the
+log kept it. A dashboard counting "refused payments" would merge all three rows into one number.
+
+That is the whole argument for this chapter, and the reason the next ones add metrics and traces *on
+top of* logs rather than instead of them.
 
 **Leave the bug in place.** It is used again in the Traces chapter.
 
@@ -960,17 +1434,58 @@ logging:
     level: "%5p [%X{cardNumber} - %X{pos}]"
 ```
 
-🛠️ **Rebuild:**
+🛠️ **Rebuild, wait for ready, then send one request:**
 
 ```powershell
 docker compose up -d --build easypay-service
+docker compose ps easypay-service                # wait for "(healthy)"
+Send-Payment -PosId POS-02 -Amount 25000
+docker compose logs --tail=40 easypay-service | Select-String "PaymentResource|PosValidator"
 ```
 
-🛠️ *(needs k6)* **Generate traffic and observe that every line now carries its card number and POS:**
+👀 **Expected logs — captured from a real run.** The new part sits between the level and the PID:
+
+```text
+2026-07-31T13:34:37.018Z  INFO [pos=POS-02, cardNumber=5555567898780008] 1 --- [easypay-service] [nio-8080-exec-5] c.w.e.payment.boundary.PaymentResource   : Processing new payment: PaymentRequest{posId='POS-02', cardNumber='****', expiryDate='789456123', amount=25000}
+2026-07-31T13:34:37.182Z  WARN [pos=POS-02, cardNumber=5555567898780008] 1 --- [easypay-service] [nio-8080-exec-5] c.w.e.payment.control.PosValidator       : Invalid value for this POS: POS-02
+2026-07-31T13:34:37.185Z ERROR [pos=POS-02, cardNumber=5555567898780008] 1 --- [easypay-service] [nio-8080-exec-5] c.w.e.payment.boundary.PaymentResource   : Cannot invoke "java.lang.Boolean.booleanValue()" because "java.util.List.get(int).active" is null
+```
+
+⚠️ Note the order: **`pos` comes first**, even though the code calls `MDC.put("cardNumber", …)` first.
+`%mdc` iterates a map, so it is not insertion order and you should never write code that depends on
+it. If you want a guaranteed order, name the keys explicitly with `%X{cardNumber} - %X{pos}`.
+
+Four things to notice, and the third one is the point of the whole chapter:
+
+1. **`%mdc` lands where `%5p` used to be.** `logging.pattern.level` overrides Spring Boot's
+   `LOG_LEVEL_PATTERN`, which sits between the timestamp and the PID — that is why the map appears
+   there and not at the end of the line.
+2. **The `WARN` from `PosValidator` carries the POS too**, and nobody passed it a parameter.
+   `PosValidator.isActive()` has no idea MDC exists. Same thread, same context, automatically.
+3. **You no longer need the thread name.** In 2.3 you matched `[nio-8080-exec-7]` to
+   `[nio-8080-exec-7]` by eye. Now every line states *whose* request it is, so grouping survives any
+   amount of concurrency: `Select-String "pos=POS-02"` pulls one customer's story out of thousands of
+   interleaved lines.
+4. ⚠️ **`cardNumber=5555567898780008` is the full PAN, in cleartext.** Note the same line still shows
+   `cardNumber='****'` inside the message, because `PaymentRequest.toString()` masks it — but the MDC
+   copy does not. **You just created the leak** that 2.5 fixes in the application and 2.8 fixes in the
+   pipeline. That is not an accident in the exercise; it is the exercise.
+
+🛠️ *(needs k6)* **Now the payoff — generate concurrent traffic and pull one POS out of the mess:**
 
 ```powershell
 k6 run -u 5 -d 5s k6/01-payment-only.js
+docker compose logs --tail=200 easypay-service | Select-String "pos=POS-02" | Select-Object -Last 10
 ```
+
+👀 Every line that comes back belongs to a `POS-02` request, regardless of which thread served it or
+what else was happening at the same time. Run the 2.3 version of that hunt again — filtering by thread
+name — and the difference is immediate.
+
+⚠️ Empty brackets (`INFO [] 1 --- ...`) on some lines are correct: startup logs, Kafka listeners and
+Eureka heartbeats run on threads that never entered `processPayment()`, so their MDC is empty. **MDC is
+per-thread, not global** — that is exactly why `MDC.clear()` in the `finally` matters, and why a
+forgotten `clear()` shows up as one customer's card number appearing under another customer's request.
 
 ### 2.5 Structured logging (optional)
 
@@ -1052,11 +1567,26 @@ deliberate — it is the file you edit. Everything else lives in `compose.servic
       - com.worldline.easypay.EasypayServiceApplication
 ```
 
-🛠️ **Redeploy:**
+🛠️ **Redeploy — note there is no `--build` here:**
 
 ```powershell
 docker compose up -d easypay-service
 ```
+
+👀 **Expected output — `Recreate`, not `Building`:**
+
+```text
+[+] Running 4/4
+ ✔ Container postgres-easypay    Healthy
+ ✔ Container config-server       Healthy
+ ✔ Container discovery-server    Healthy
+ ✔ Container easypay-service     Started
+```
+
+You changed `compose.yml`, not Java, so the **image is unchanged** — only the container's entrypoint
+and environment are. Compose recreates the container from the existing image in a couple of seconds.
+Use `--build` when you touch `.java` or `build.gradle.kts`; skip it for Compose-only edits and save
+yourself 40 seconds every time.
 
 ✅ **Confirm the agent attached:**
 
@@ -1064,14 +1594,28 @@ docker compose up -d easypay-service
 docker compose logs easypay-service | Select-String "otel.javaagent"
 ```
 
-Expected:
+👀 **Expected output — exactly one line.** Captured:
 
 ```text
-easypay-service  | [otel.javaagent ...] [main] INFO io.opentelemetry.javaagent.tooling.VersionLogger - opentelemetry-javaagent - version: 2.14.0
+easypay-service  | [otel.javaagent 2026-07-31 13:35:41:921 +0000] [main] INFO io.opentelemetry.javaagent.tooling.VersionLogger - opentelemetry-javaagent - version: 2.14.0
 ```
 
+One line is the whole confirmation — the agent is deliberately quiet at `INFO`. Do not go looking for
+more.
+
+Three things that make this the most important verification in the chapter:
+
+- **`[otel.javaagent ...]` prefix.** These lines are printed by the *agent*, before and around Spring
+  Boot's own logging. If you see them, bytecode instrumentation is active.
+- **`version: 2.14.0`** matches `OTEL_AGENT_VERSION` in
+  `easypay-service/src/main/docker/Dockerfile` — the jar was baked into the image all along; you only
+  just started using it.
+- **Empty output means the agent is not attached.** Check your YAML indentation under `entrypoint:`
+  (`docker compose config` prints the merged result), and confirm you edited `compose.yml` rather than
+  `compose.services.yml`.
+
 ⚠️ `Select-String` is the PowerShell equivalent of `grep`. Drop `-f` from `docker compose logs` when
-filtering — `-f` never terminates.
+filtering — `-f` never terminates, so the pipeline hangs with no output and looks like a failure.
 
 The collector is already configured to receive logs and forward them to Loki — see
 `docker/otelcol/otelcol.yaml`, pipeline `logs: otlp → batch → otlphttp/loki`.
@@ -1093,8 +1637,46 @@ Send-Payment -Amount 40000
 k6 run -u 1 -d 1m k6/01-payment-only.js
 ```
 
-👀 Look at other services too (`api-gateway`). And notice something alarming: the card numbers are
-in the logs. 😨
+👀 **Expected in Grafana** — the log *line* shrinks to just the message (`Invalid value for this POS:
+POS-02`); everything the console crammed into that line became a queryable field. Captured from Loki's
+API for one real `WARN`:
+
+| Field | Captured value | Where it came from |
+| --- | --- | --- |
+| `service_name` | `easypay-service` | `OTEL_RESOURCE_ATTRIBUTES`, 2.6 |
+| `service_namespace`, `service_version`, `service_instance_id`, `deployment_environment` | `service`, `1.0.0`, `easypay-service:8080`, `dev` | same |
+| `detected_level` / `severity_text` / `severity_number` | `warn` / `WARN` / `13` | the Logback level, three ways |
+| `scope_name` | `com.worldline.easypay.payment.control.PosValidator` | the logger's class |
+| **`pos`** | `POS-02` | **your MDC key from 2.4**, via `capture-mdc-attributes=*` |
+| **`cardNumber`** | `5555567898780008` | same — **the full PAN, see below** |
+| **`trace_id`** | `3f1b2bb2a6aba007ad4a0eeaf76a0beb` | the agent, **already populated** |
+| **`span_id`** | `b4454715f69c8f73` | the agent |
+| `thread_name` / `thread_id` | `http-nio-8080-exec-7` / `83` | note the console truncates this to `nio-8080-exec-7` |
+| `process_command_args` | the entire `java -javaagent:… -cp …` command line | the agent's process detector |
+| `host_name`, `host_arch`, `os_type`, `os_description` | `easypay-service`, `amd64`, `linux`, `Linux 5.15.167.4-microsoft-standard-WSL2` | ditto — note WSL2 is visible |
+| `telemetry_distro_version`, `telemetry_sdk_version` | `2.14.0`, `1.48.0` | agent and SDK |
+
+⚠️ **`trace_id` is populated right now, not in Chapter 5.** The agent has been stamping trace context
+onto every log record since the moment you attached it. Chapter 5 does not create the id — it teaches
+Grafana to turn that id into a *clickable link*. Worth knowing so you do not go hunting for a missing
+field.
+
+👀 **Only four of those are indexed labels.** `curl http://localhost:3100/loki/api/v1/labels` returns
+exactly `deployment_environment`, `service_instance_id`, `service_name`, `service_namespace`.
+Everything else — including `cardNumber` and `trace_id` — is **structured metadata**: stored per
+record, filterable, but not part of the index. That is deliberate on Loki's part, and it is the reason
+promoting all your MDC keys with `capture-mdc-attributes=*` does not blow up the label index the way
+[unbounded metric labels](OBSERVABILITY-101.md#cardinality) would blow up Prometheus.
+
+⚠️ Nothing in Grafana? The usual order of blame: no traffic since the agent attached (send another
+payment), the time range is too narrow (set it to *Last 15 minutes*), or the agent is not actually
+attached — re-run the `otel.javaagent` check from 2.6.
+
+👀 **Now the point of this step.** Look at other services too (`api-gateway`), then look hard at that
+`cardNumber` field: **the full card number is sitting in your log backend, queryable, retained.**
+`PaymentRequest.toString()` masked it inside the *message*, but 2.4's `MDC.put` put the raw PAN in an
+attribute, and the agent faithfully shipped it. That is a PCI-DSS violation you introduced two steps
+ago without noticing — which is exactly how it happens in real systems. 😨
 
 ### 2.8 PII obfuscation
 
@@ -1126,13 +1708,58 @@ service:
       exporters: [otlphttp/loki]
 ```
 
-🛠️ **Restart the collector:**
+🛠️ **Restart the collector, then generate fresh logs:**
 
 ```powershell
 docker compose up -d --build opentelemetry-collector
+docker compose logs --tail=20 opentelemetry-collector    # check it actually started
+Send-Payment -Amount 40000
 ```
 
-🛠️ **Generate more logs, then ✅ confirm card numbers now show as `****`.**
+👀 **Expected from the collector's own logs — silence is success.** A healthy start looks like:
+
+```text
+opentelemetry-collector  | info service@v0.x/service.go:xxx Everything is ready. Begin running and processing data.
+```
+
+⚠️ A YAML mistake here does **not** fail loudly at the Compose level — the container exits and the
+whole pipeline goes quiet, which looks exactly like "no traffic". If Grafana stops updating after this
+step, read those collector logs first:
+
+```text
+opentelemetry-collector  | Error: failed to get config: cannot unmarshal the configuration: ...
+```
+
+✅ **Confirm the redaction worked — in Grafana, not in your terminal:**
+
+| Where you look | Card number shows as | Why |
+| --- | --- | --- |
+| Grafana → Explore → Loki, **new** lines | `****` | the collector redacted it on the way to Loki |
+| Grafana → Loki, lines from *before* this step | still the full PAN | already stored; redaction is not retroactive |
+| `docker compose logs easypay-service` | still the full PAN | never passed through the collector at all |
+
+Captured from Loki's API after this step — the same `cardNumber` field that read
+`5555567898780008` in 2.7:
+
+```text
+cardNumber = ****
+pos        = POS-01
+line       = Processing new payment: PaymentRequest{posId='POS-01', cardNumber='****', expiryDate='789456123', amount=40000}
+```
+
+👀 Note **both** occurrences are now `****`: the one inside the message (masked all along by
+`PaymentRequest.toString()`) and the MDC attribute (masked just now by the collector). The
+`blocked_values` regexes match the *value*, wherever it appears — that is why `allow_all_keys: true`
+plus a value pattern is safer than trying to enumerate field names you must remember to keep updating.
+
+👀 That middle row is the lesson people miss: **the collector protects the backend from now on, and
+cleans up nothing.** Data already written stays written. The terminal keeps leaking because your
+console output never touches the pipeline. Fixing it *in the application* is 2.5 — which is why the
+guide calls masking at the collector one half of the job, not the whole of it.
+
+⚠️ The `redaction` processor is attached to the **`logs`** pipeline only. Card numbers travelling as
+span attributes or metric labels would sail straight through — worth remembering when you add custom
+spans in [4.3](#43-custom-spans).
 
 ---
 
@@ -1156,8 +1783,8 @@ docker compose up -d --build opentelemetry-collector
 > [why not averages](OBSERVABILITY-101.md#why-not-averages),
 > [cardinality](OBSERVABILITY-101.md#cardinality) — the one that gets juniors fired from a Prometheus.
 >
-> ⚠️ The `opentelemetry-api` dependency is already in `build.gradle.kts` here; the meters in
-> `PaymentService` are not. You write those.
+> ⚠️ 3.5 is two edits, not one: the `opentelemetry-api` dependency in `build.gradle.kts` **and** the
+> meters in `PaymentService`. Neither is pre-applied here.
 
 Goal: collect metrics and forward them to Prometheus, again through the collector.
 
@@ -1367,14 +1994,56 @@ k6 run -u 1 -d 1m k6/01-payment-only.js
 Send-PaymentBurst -Count 50 -Amount 40000
 ```
 
-👀 In Grafana → Explore → Prometheus, search `easypay_payment_process`. You get three series:
+✅ **Confirm the metrics exist before you go looking in Grafana** — this queries Prometheus directly:
 
-- `easypay_payment_process_milliseconds_bucket` — count of events faster than the `le` tag,
-- `easypay_payment_process_milliseconds_count` — number of hits,
-- `easypay_payment_process_milliseconds_sum` — total time.
+```powershell
+((Invoke-RestMethod "http://localhost:9090/api/v1/label/__name__/values").data) -like "easypay*"
+```
 
-Average = `sum / count`. Percentiles come from the buckets. The counter appears as
-`easypay_payment_requests_total`.
+👀 **Expected output — exactly seven series from your three instruments.** Captured:
+
+```text
+easypay_payment_process_milliseconds_bucket
+easypay_payment_process_milliseconds_count
+easypay_payment_process_milliseconds_sum
+easypay_payment_requests_total
+easypay_payment_store_milliseconds_bucket
+easypay_payment_store_milliseconds_count
+easypay_payment_store_milliseconds_sum
+```
+
+Read the naming carefully, because you wrote none of these names:
+
+| You declared | Prometheus shows | Rule |
+| --- | --- | --- |
+| `easypay.payment.process`, unit `ms` | `easypay_payment_process_milliseconds_*` | dots → underscores, unit → suffix |
+| `easypay.payment.requests` (counter) | `easypay_payment_requests_total` | counters get `_total` |
+| one histogram | **three** series: `_bucket`, `_count`, `_sum` | a histogram is not one number |
+
+👀 **The buckets, captured after 9 payments** (`easypay_payment_process_milliseconds_bucket`) — note
+they are **cumulative**, each `le` counting everything at or below it:
+
+```text
+le=0       count=0
+le=5       count=1
+le=10      count=1
+le=25      count=8      <- 7 payments landed between 10 ms and 25 ms
+le=50      count=8
+le=100     count=8
+le=250     count=8
+le=500     count=9      <- one slow outlier, the very first request
+le=1000    count=9
+le=+Inf    count=9      <- total, always equals _count
+```
+
+with `_count = 9` and `_sum = 562`. So the average is `562 / 9 ≈ 62 ms` — and look at what that
+average hides: **eight requests under 25 ms and one somewhere between 250 ms and 500 ms** (JIT warm-up
+on the first call). The average is nearly three times the typical request. That single row is the whole
+argument for histograms over averages, in your own data.
+
+⚠️ The bucket boundaries (`0, 5, 10, 25, 50, 75, 100, 250, 500, 750, 1000, 2500, 5000, 7500, 10000`)
+are the OpenTelemetry **default explicit bucket ladder**. You did not choose them. If your latencies
+cluster inside one bucket, your percentiles are guesses — that is when you define custom boundaries.
 
 🛠️ **6. Compute percentiles: select the `_bucket` metric → Operations → Aggregations →
 Histogram quantile → pick a quantile → Run query.**
@@ -1439,6 +2108,56 @@ k6 run -u 1 -d 5m k6/01-payment-only.js
 
 ⚠️ Tempo needs a minute or two to ingest before traces appear. Be patient before concluding it is
 broken.
+
+✅ **Impatient? Query Tempo's API directly** and skip the UI entirely:
+
+```powershell
+$end=[DateTimeOffset]::UtcNow.ToUnixTimeSeconds(); $start=$end-300
+$q=[uri]::EscapeDataString('{resource.service.name="easypay-service" && name="POST /payments"}')
+(Invoke-RestMethod "http://localhost:3200/api/search?q=$q&start=$start&end=$end&limit=3").traces.traceID
+```
+
+👀 **Expected trace content — 31 spans for one payment, captured from a real `Send-Payment -Amount
+40000`:**
+
+```text
+api-gateway            POST easypay-service                      35.1 ms   <- the whole request
+api-gateway            POST                                      34.0 ms
+easypay-service        POST /payments                             33.0 ms
+easypay-service          easypay: Payment processing method       18.1 ms  <- YOUR span (4.3)
+easypay-service            PosRefRepository.findAll                3.0 ms
+easypay-service              SELECT easypay.pos_ref                0.5 ms
+easypay-service            CardRefRepository.count                 2.8 ms
+easypay-service              SELECT easypay.card_ref               0.4 ms
+easypay-service            POST                                    8.9 ms  <- outbound to the bank
+smartbank-gateway            POST /authors/authorize               7.2 ms
+smartbank-gateway              BankAuthorRepository.save           0.4 ms
+smartbank-gateway                INSERT smartbank.bank_author      0.3 ms
+smartbank-gateway              Transaction.commit                  3.9 ms
+easypay-service          easypay: Payment store method             2.3 ms  <- YOUR span (4.3)
+easypay-service            PaymentRepository.saveAndFlush          2.2 ms
+easypay-service              INSERT easypay.payment                0.6 ms
+easypay-service          payment-topic publish                      1.7 ms
+fraudetect-service         payment-topic process                    8.0 ms
+fraudetect-service           FraudRepository.findOne                2.3 ms
+fraudetect-service             SELECT fraudetect.fraud              0.3 ms
+fraudetect-service           Transaction.commit                     4.0 ms
+merchant-backoffice        payment-topic process                    0.8 ms
+```
+
+*(Indentation added for readability; Tempo shows the same tree. Some Hibernate `Session.*` spans
+omitted here — the real trace has 31.)*
+
+Three things in that tree are worth more than the whole Grafana tour:
+
+- **Nobody wrote code for 29 of those 31 spans.** HTTP, JDBC, Hibernate, Spring Data repositories,
+  Feign and Kafka are all instrumented by the agent. The only two you authored are the
+  `easypay: Payment …` ones, and they are the only two that use *business* vocabulary.
+- **The Kafka consumers are in the same trace**, minutes of architecture away from the HTTP request,
+  because the trace context rode along in the message headers.
+- **`POST` (8.9 ms) inside easypay is the bank call**, and `POST /authors/authorize` (7.2 ms) is
+  smartbank's view of the same call. Two spans, two services, one network hop — the difference between
+  them is what a network problem would show up as.
 
 👀 Click **Service Graph** → **Node graph** to see how services talk to each other.
 
@@ -1791,11 +2510,44 @@ Compose `environment:` map is a YAML boolean, not the string the agent reads.
 
 ```powershell
 docker compose up -d easypay-service
-docker compose logs -f easypay-service
+docker compose logs easypay-service | Select-String "yroscope" | Select-Object -First 3
 ```
 
-👀 You should see Pyroscope lines in the startup logs, and `easypay-service` becomes selectable at
-<http://localhost:4040>.
+👀 **Expected output — one `[DEBUG] Config:` line proving the profiler read your environment.**
+Captured:
+
+```text
+2026-07-31 13:43:33.478 [DEBUG] Config: Config{agentEnabled=true, applicationName='easypay-service',
+profilerType=ASYNC, profilingInterval=PT0.01S, profilingEvent=ITIMER, profilingAlloc='512k',
+profilingLock='10ms', uploadInterval=PT5S, javaStackDepthMax=2048, logLevel=INFO,
+serverAddress='http://pyroscope:4040', format=JFR, pushQueueCapacity=8, ...}
+```
+
+Every value in there traces back to a `PYROSCOPE_*` variable you just set — `PT0.01S` is your `10ms`
+interval, `ITIMER` your profiler event, `PT5S` your upload interval. If `agentEnabled=false` or the
+line is missing entirely, the `-javaagent:/pyroscope.jar` flag did not take.
+
+✅ **Confirm Pyroscope is receiving data** without opening the UI:
+
+```powershell
+(Invoke-RestMethod "http://localhost:4040/querier.v1.QuerierService/LabelValues" -Method Post `
+  -ContentType 'application/json' -Body '{"name":"service_name"}').names
+```
+
+👀 **Expected output:**
+
+```text
+easypay-service
+pyroscope
+```
+
+`pyroscope` is Pyroscope profiling itself — it ships with its own profiles enabled, which is why the UI
+has something to show even before you instrument anything. `easypay-service` appearing next to it means
+your agent is uploading.
+
+⚠️ Give it ~20 s and some traffic first (`PYROSCOPE_UPLOAD_INTERVAL: 5s` plus a JFR chunk to fill). An
+idle JVM produces almost no samples, so a flamegraph that looks empty usually means no load, not a
+broken agent.
 
 ### 6.3 Pyroscope in Grafana
 
@@ -1909,6 +2661,157 @@ directly:**
 docker compose ps easypay-service
 docker compose logs --tail=50 easypay-service
 ```
+
+### Every request returns 500 after a rebuild, but easypay is healthy
+
+The nastiest failure in this workshop, because every instinct points at your code. **It is the
+gateway, not easypay.**
+
+Symptom: after `docker compose up -d [--build] easypay-service`, *every* payment returns 500 —
+including plain `Send-Payment -Amount 40000`, which has nothing to do with the `POS-02` bug — and the
+body carries a `requestId`:
+
+```text
+HTTP 500
+
+{
+  "timestamp": "2026-07-31T13:45:00.175+00:00",
+  "path": "/api/easypay/payments",
+  "status": 500,
+  "error": "Internal Server Error",
+  "requestId": "7939aa55-1401"
+}
+```
+
+🛠️ **Confirm it is the gateway and not your service** — all three of these pass while payments still
+fail:
+
+```powershell
+docker compose ps easypay-service                                    # Up ... (healthy)
+docker compose logs --tail=50 easypay-service | Select-String "PaymentResource"   # nothing: no request arrived
+docker compose exec api-gateway sh -c "curl -s -o /dev/null -w '%{http_code}' http://easypay-service:8080/actuator/health"
+```
+
+That last command returned `200` in the session this was captured in, and
+`docker compose exec api-gateway getent hosts easypay-service` resolved the **correct, current** IP.
+Network fine, DNS fine, easypay fine — and still 500.
+
+**Why.** `api-gateway` routes straight to `http://easypay-service:8080` (no `lb://`, no Eureka), and
+Spring Cloud Gateway pools its outbound connections. Recreating the easypay container hands it a
+**new IP**; the gateway keeps reusing pooled connections to the address that no longer exists and
+turns the resulting I/O error into a 500 of its own making.
+
+🛠️ **Fix — restart the gateway:**
+
+```powershell
+docker compose restart api-gateway
+Send-Payment -Amount 40000    # ACCEPTED
+```
+
+Verified: `HTTP 500` immediately before the restart, `ACCEPTED / STANDARD / bankCalled True`
+immediately after.
+
+⚠️ It is **intermittent**, which is what makes it so confusing. Docker often reuses the same IP for
+the recreated container, and then nothing goes wrong — several rebuilds in a row work fine, then one
+does not. If a rebuild suddenly breaks *everything*, restart the gateway before you suspect your edit.
+
+### A rebuild silently did nothing (your change is not there)
+
+`docker compose up -d --build easypay-service` prints `Container easypay-service Started` even when
+the **image build failed**. Compose reports the container it left running — the *old* one. Your change
+is not deployed, the logs look normal, and nothing says "build error" unless you scroll.
+
+🛠️ **Check what is actually running:**
+
+```powershell
+docker inspect easypay-service --format "started={{.State.StartedAt}}"
+```
+
+If that timestamp predates your edit, the build failed. Get the real reason:
+
+```powershell
+docker compose build easypay-service --progress=plain 2>&1 | Select-String "error:|What went wrong" -Context 0,6
+```
+
+A Java mistake surfaces as:
+
+```text
+> Compilation failed; see the compiler error output for details.
+BUILD FAILED in 7s
+ERROR: process "/bin/sh -c ./gradlew :easypay-service:clean :easypay-service:build -x test" did not complete successfully: exit code: 1
+```
+
+⚠️ **Compile before you deploy** and this never bites you:
+
+```powershell
+.\gradlew.bat :easypay-service:compileJava
+```
+
+It takes ~5 s against a warm Gradle cache and gives you file-and-line errors instead of a Docker
+build log.
+
+### The first payment after a restart fails, or returns `AMOUNT_EXCEEDED`
+
+Two different symptoms, one cause: **you were faster than the stack.** Both are normal within the
+first minute after `docker compose up`, and neither means you broke anything.
+
+**Symptom A — no HTTP response at all:**
+
+```text
+HTTP 0
+The response ended prematurely. (ResponseEnded)
+```
+
+`HTTP 0` is the helper reporting "no status code arrived". The gateway accepted your TCP connection
+and closed it before answering, because it (or easypay behind it) was still booting. Spring Boot
+reports the moment it is genuinely ready:
+
+```powershell
+docker compose logs api-gateway | Select-String "Netty started|Started ApiGatewayApplication"
+```
+
+**Symptom B — a valid response with the wrong code:**
+
+```text
+responseCode   : AMOUNT_EXCEEDED
+processingMode : FALLBACK
+bankCalled     : False
+```
+
+The bank was never called. `easypay` resolves `smartbank-gateway` through **Eureka**
+(`@FeignClient("SMARTBANK-GATEWAY")`), and Eureka registration lags container startup by up to a
+minute — so easypay's load-balancer cache is briefly empty. Confirm it in the logs:
+
+```powershell
+docker compose logs easypay-service | Select-String "No servers available|Accept by delegation"
+```
+
+You will see the retry pattern, three attempts one and two seconds apart, then the fallback:
+
+```text
+No servers available for service: SMARTBANK-GATEWAY
+Exception while requesting bank, operation will be retried or fallback: Connection refused ...
+Accept by delegation. Error was: Connection refused executing POST http://SMARTBANK-GATEWAY/authors/authorize
+```
+
+**Fix for both:** wait until all five instances are `UP`, then send the payment again.
+
+```powershell
+$r = Invoke-RestMethod -Uri 'http://localhost:8761/eureka/apps' -Headers @{Accept='application/json'}
+$r.applications.application | ForEach-Object { "$($_.name) : $($_.instance.status)" }
+Send-Payment -Amount 25000    # expect ACCEPTED, bankCalled True, processingMode STANDARD
+```
+
+👀 **This is worth stopping on for a moment.** You just hit the exact failure the workshop is built to
+teach: the response said `AMOUNT_EXCEEDED`, which reads as *"the customer asked for too much money"*,
+while the real cause was *service discovery not ready*. Nothing in the response body hints at that,
+and the HTTP status was still **201 Created**. Chapter 2 gets you the `WARN` lines above; Chapter 4
+shows you the failed calls and the retries in one picture.
+
+⚠️ If it still returns `AMOUNT_EXCEEDED` after a couple of minutes, then the bank really is
+unreachable — check `docker compose ps smartbank-gateway`, and remember that amounts **below** `20000`
+are still accepted in `FALLBACK` mode, so `Send-Payment -Amount 15000` returning `ACCEPTED` does not
+prove the bank is back.
 
 ### No data in Grafana
 

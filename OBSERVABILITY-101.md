@@ -328,19 +328,27 @@ up, not down: it is a direct trade of freshness against network and storage cost
 A **span** is one timed operation with a name, a start, a duration, attributes and a parent. A
 **trace** is the tree of spans belonging to one logical request.
 
-For a `40000` payment in this app, the trace looks roughly like:
+For a `40000` payment in this app the trace has **31 spans**. Captured from a real run, trimmed to the
+interesting ones:
 
 ```text
-POST /api/easypay/payments                       api-gateway        820ms
-└── POST /payments                               easypay-service    780ms
-    ├── SELECT easypay.pos_ref                   easypay-service      4ms
-    ├── SELECT easypay.card_ref                  easypay-service      3ms
-    ├── POST /authors/authorize                  smartbank-gateway  600ms
-    │   └── INSERT smartbank.bank_author         smartbank-gateway   12ms
-    ├── INSERT easypay.payment                   easypay-service      6ms
-    └── payment-topic publish                    easypay-service      2ms
-        ├── payment-topic receive                fraudetect-service  30ms
-        └── payment-topic receive                merchant-backoffice 25ms
+POST easypay-service                      api-gateway          35.1ms
+└── POST                                  api-gateway          34.0ms
+    └── POST /payments                     easypay-service      33.0ms
+        ├── easypay: Payment processing method                  18.1ms   <- hand-written
+        │   ├── PosRefRepository.findAll    easypay-service      3.0ms
+        │   │   └── SELECT easypay.pos_ref  easypay-service      0.5ms
+        │   ├── CardRefRepository.count     easypay-service      2.8ms
+        │   └── POST                        easypay-service      8.9ms
+        │       └── POST /authors/authorize smartbank-gateway    7.2ms
+        │           ├── BankAuthorRepository.save               0.4ms
+        │           └── Transaction.commit                      3.9ms
+        ├── easypay: Payment store method                        2.3ms   <- hand-written
+        │   └── PaymentRepository.saveAndFlush                   2.2ms
+        │       └── INSERT easypay.payment                       0.6ms
+        └── payment-topic publish           easypay-service      1.7ms
+            ├── payment-topic process       fraudetect-service   8.0ms
+            └── payment-topic process       merchant-backoffice  0.8ms
 ```
 
 Nobody wrote code to produce that. The agent instruments Spring MVC, JDBC, Feign and Kafka clients
