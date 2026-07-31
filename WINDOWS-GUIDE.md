@@ -1925,6 +1925,69 @@ docker compose ps easypay-service
 docker compose logs --tail=50 easypay-service
 ```
 
+### The first payment after a restart fails, or returns `AMOUNT_EXCEEDED`
+
+Two different symptoms, one cause: **you were faster than the stack.** Both are normal within the
+first minute after `docker compose up`, and neither means you broke anything.
+
+**Symptom A — no HTTP response at all:**
+
+```text
+HTTP 0
+The response ended prematurely. (ResponseEnded)
+```
+
+`HTTP 0` is the helper reporting "no status code arrived". The gateway accepted your TCP connection
+and closed it before answering, because it (or easypay behind it) was still booting. Spring Boot
+reports the moment it is genuinely ready:
+
+```powershell
+docker compose logs api-gateway | Select-String "Netty started|Started ApiGatewayApplication"
+```
+
+**Symptom B — a valid response with the wrong code:**
+
+```text
+responseCode   : AMOUNT_EXCEEDED
+processingMode : FALLBACK
+bankCalled     : False
+```
+
+The bank was never called. `easypay` resolves `smartbank-gateway` through **Eureka**
+(`@FeignClient("SMARTBANK-GATEWAY")`), and Eureka registration lags container startup by up to a
+minute — so easypay's load-balancer cache is briefly empty. Confirm it in the logs:
+
+```powershell
+docker compose logs easypay-service | Select-String "No servers available|Accept by delegation"
+```
+
+You will see the retry pattern, three attempts one and two seconds apart, then the fallback:
+
+```text
+No servers available for service: SMARTBANK-GATEWAY
+Exception while requesting bank, operation will be retried or fallback: Connection refused ...
+Accept by delegation. Error was: Connection refused executing POST http://SMARTBANK-GATEWAY/authors/authorize
+```
+
+**Fix for both:** wait until all five instances are `UP`, then send the payment again.
+
+```powershell
+$r = Invoke-RestMethod -Uri 'http://localhost:8761/eureka/apps' -Headers @{Accept='application/json'}
+$r.applications.application | ForEach-Object { "$($_.name) : $($_.instance.status)" }
+Send-Payment -Amount 25000    # expect ACCEPTED, bankCalled True, processingMode STANDARD
+```
+
+👀 **This is worth stopping on for a moment.** You just hit the exact failure the workshop is built to
+teach: the response said `AMOUNT_EXCEEDED`, which reads as *"the customer asked for too much money"*,
+while the real cause was *service discovery not ready*. Nothing in the response body hints at that,
+and the HTTP status was still **201 Created**. Chapter 2 gets you the `WARN` lines above; Chapter 4
+shows you the failed calls and the retries in one picture.
+
+⚠️ If it still returns `AMOUNT_EXCEEDED` after a couple of minutes, then the bank really is
+unreachable — check `docker compose ps smartbank-gateway`, and remember that amounts **below** `20000`
+are still accepted in `FALLBACK` mode, so `Send-Payment -Amount 15000` returning `ACCEPTED` does not
+prove the bank is back.
+
 ### No data in Grafana
 
 **Work down the pipeline:**
