@@ -145,88 +145,42 @@ workshop was run once, end to end, on this machine, and every output block was p
 Where something could not be captured it says so explicitly. So if your output differs from a block
 here, that is a signal worth investigating rather than a documentation guess.
 
-| Step | What you will add | Where | Verify with |
+| Step | Change | Where | State here |
 | --- | --- | --- | --- |
-| 2.2 | uncomment 7 `LOG.*` + the `LOG` declaration | `PaymentResource.java` | grep `PaymentResource` in the logs |
-| 2.3 | wrap `isActive()` in `try/catch (NullPointerException)` + `LOG.warn` + rethrow | `PosValidator.java` | `Send-Payment -PosId POS-02`, grep `PosValidator` |
-| 2.4 | uncomment 3 `MDC.` lines; add `logging.pattern.level: "%5p [%mdc]"` | `PaymentResource.java`, `application.yaml` | log lines show `[pos=…, cardNumber=…]` |
-| 2.5 | *(optional)* structured console format | `application.yaml` | JSON log lines |
-| 2.6 | `-javaagent`, 2 `logback-appender` properties, 3 `OTEL_*` env vars | `compose.yml` | `Select-String "otel.javaagent"` → **1** line |
-| 2.8 | `redaction/card-numbers` on the `logs` pipeline | `docker/otelcol/otelcol.yaml` | `cardNumber` reads `****` in Loki |
-| 3.1 | `-Dotel.metric.export.interval=5000` | `compose.yml` | metrics within ~5 s, not 60 |
-| 3.5 | `opentelemetry-api`; 2 `LongHistogram` + 1 `LongCounter` | `build.gradle.kts`, `PaymentService.java` | **7** `easypay_*` series in Prometheus |
-| 4.2 | `tail_sampling/actuator` on the `traces` pipeline | `docker/otelcol/otelcol.yaml` | no `/actuator/health` traces |
-| 4.3 | `opentelemetry-instrumentation-annotations`; `@WithSpan` + `@SpanAttribute` | `build.gradle.kts`, `PaymentService.java` | 2 `easypay: Payment …` spans per trace |
-| 6.2 | 11 `PYROSCOPE_*`/`OTEL_PYROSCOPE_*` vars, `-javaagent:/pyroscope.jar` | `compose.yml` | Pyroscope lists `easypay-service` |
+| 2.2 | uncomment the `LOG.*` statements | `easypay-service/.../payment/boundary/PaymentResource.java` | ⬜ **you do this** — still commented out |
+| 2.3 | wrap `isActive()` in `try/catch (NullPointerException)` + `LOG.warn` | `easypay-service/.../payment/control/PosValidator.java` | ⬜ **you do this** — no `try/catch` yet |
+| 2.4 | `MDC.put`/`MDC.clear()` in `processPayment()` | same `PaymentResource.java` | ⬜ **you do this** — still commented out |
+| 2.4 | `logging.pattern.level: "%5p [%mdc]"` | `easypay-service/src/main/resources/application.yaml` | ✅ already applied |
+| 2.6 | `-javaagent`, both `logback-appender` properties, three `OTEL_*` env vars | `compose.yml` | ✅ already applied |
+| 2.8 | `redaction/card-numbers` processor on the `logs` pipeline | `docker/otelcol/otelcol.yaml` | ✅ already applied |
+| 3.1 | `-Dotel.metric.export.interval=5000` | `compose.yml` | ✅ already applied |
+| 3.5 | `io.opentelemetry:opentelemetry-api` dependency | `easypay-service/build.gradle.kts` | ✅ already applied |
+| 3.5 | two `LongHistogram` + one `LongCounter` | `easypay-service/.../payment/control/PaymentService.java` | ⬜ **you do this** — no meters yet |
+| 4.2 | `tail_sampling/actuator` processor on the `traces` pipeline | `docker/otelcol/otelcol.yaml` | ✅ already applied |
+| 4.3 | `opentelemetry-instrumentation-annotations` dependency | `easypay-service/build.gradle.kts` | ✅ already applied (upstream docs claim this is pre-added; in a *fresh clone* it is not — here it is) |
+| 4.3 | `@WithSpan` + `@SpanAttribute` on `process`/`store` | `easypay-service/.../payment/control/PaymentService.java` | ⬜ **you do this** — not annotated yet |
+| 6.2 | 11 `PYROSCOPE_*`/`OTEL_PYROSCOPE_*`/`OTEL_JAVAAGENT_EXTENSIONS` env vars, `-javaagent:/pyroscope.jar` | `compose.yml` | ✅ already applied |
 
-Only the *jars* are pre-provided: `easypay-service/src/main/docker/Dockerfile` already `ADD`s
-`opentelemetry-javaagent.jar`, `pyroscope.jar` and `pyroscope-otel.jar` into the image. Attaching them
-is 2.6 and 6.2 — your job.
+**2.5 is skipped on purpose** (masking the card number in the application's own logs). Two things are
+worth knowing about that, because the guide used to state it imprecisely:
 
-⚠️ 2.4 is the step that **introduces the PAN leak** — `MDC.put("cardNumber", …)` stores the raw number
-and `%mdc` prints the whole map. Intentional; 2.5 and 2.8 are the two halves of the fix.
+- `PaymentRequest.toString()` **already** prints `cardNumber='****'`, so the log line from 2.2
+  (`LOG.info("Processing new payment: {}", paymentRequest)`) never leaks the PAN.
+- The leak comes from **2.4**: `MDC.put("cardNumber", …)` puts the raw number in the MDC, and
+  `%mdc` prints the whole map, so it lands in `docker compose logs easypay-service`. Grafana shows
+  `****` anyway because 2.8 redacts at the collector — the collector protects the backend, not your
+  terminal.
 
-⚠️ **The running containers do not match these files yet.** The end-to-end capture run left the stack
-fully instrumented. Before you start, put the runtime back in step with the sources:
-
-```powershell
-docker compose up -d --build easypay-service opentelemetry-collector
-docker compose restart api-gateway              # see the connection-pool trap below
-docker compose ps easypay-service               # wait for "(healthy)"
-```
-
-| Step | What you will add | Where |
-| --- | --- | --- |
-| 2.5 | *(optional)* structured console format | `application.yaml` |
-| 2.6 | `-javaagent`, both `logback-appender` properties, three `OTEL_*` env vars | `compose.yml` |
-| 2.8 | `redaction/card-numbers` processor on the `logs` pipeline | `docker/otelcol/otelcol.yaml` |
-| 3.1 | `-Dotel.metric.export.interval=5000` | `compose.yml` |
-| 3.5 | `io.opentelemetry:opentelemetry-api` dependency, then two `LongHistogram` + one `LongCounter` | `easypay-service/build.gradle.kts`, `easypay-service/.../payment/control/PaymentService.java` |
-| 4.2 | `tail_sampling/actuator` processor on the `traces` pipeline | `docker/otelcol/otelcol.yaml` |
-| 4.3 | `opentelemetry-instrumentation-annotations` dependency, then `@WithSpan` + `@SpanAttribute` on `process`/`store` | same two files |
-| 6.2 | 11 `PYROSCOPE_*`/`OTEL_PYROSCOPE_*`/`OTEL_JAVAAGENT_EXTENSIONS` env vars, `-javaagent:/pyroscope.jar` | `compose.yml` |
-
-Only the *jars* are pre-provided: `easypay-service/src/main/docker/Dockerfile` already `ADD`s
-`opentelemetry-javaagent.jar`, `pyroscope.jar` and `pyroscope-otel.jar` into the image. Attaching them
-is 2.6 and 6.2 — your job.
-
-**Check your own progress at any time**, rather than trusting any table:
+**Verify the table yourself** rather than trusting it — one command per claim:
 
 ```powershell
-git status --short          # which files you have changed so far
-git diff --stat             # how much
+git status --short                                   # empty for a file => that file is at upstream state
 Select-String -Path easypay-service\src\main\java\com\worldline\easypay\payment\boundary\PaymentResource.java -Pattern "// LOG\.|// MDC\."
 Select-String -Path compose.yml -Pattern "javaagent|otel.metric.export.interval"
 ```
 
-At the clean slate the first `Select-String` prints **10 commented lines** and the second prints
-**nothing**. As you work through the chapters those flip over — with 2.2 applied it is down to the
-**3 `// MDC.` lines** that 2.4 will uncomment.
-
-### Starting over
-
-To throw away your exercise edits and return to this state:
-
-```powershell
-git stash                                              # or: git checkout -- <files you edited>
-docker compose down -v --remove-orphans                # drop containers and DB volumes
-docker compose up -d --build --remove-orphans          # rebuild from the clean sources
-```
-
-⚠️ Reverting the files is not enough on its own — the *running containers* still carry the old build.
-Anything you changed in `compose.yml` or a `.java` file needs
-`docker compose up -d --build easypay-service` before the running system matches your sources again.
-
-### A note on 2.5 and where the card number actually leaks
-
-Worth knowing before you start, because it is easy to state imprecisely:
-
-- `PaymentRequest.toString()` **already** prints `cardNumber='****'`, so the log line you enable in
-  2.2 (`LOG.info("Processing new payment: {}", paymentRequest)`) never leaks the PAN.
-- The leak arrives with **2.4**: `MDC.put("cardNumber", …)` stores the raw number and `%mdc` prints the
-  whole map, so it reaches `docker compose logs easypay-service`.
-- **2.8** redacts at the collector, so Grafana shows `****` — but your terminal still does not. The
-  collector protects the backend, not your console. Masking in the application (2.5) is the other half.
+The first `Select-String` printing matches means 2.2/2.4 are **not** applied yet. The second printing
+nothing means 3.5/4.3 are **not** applied yet. `git diff` is the final source of truth.
 
 ---
 
@@ -2661,157 +2615,6 @@ directly:**
 docker compose ps easypay-service
 docker compose logs --tail=50 easypay-service
 ```
-
-### Every request returns 500 after a rebuild, but easypay is healthy
-
-The nastiest failure in this workshop, because every instinct points at your code. **It is the
-gateway, not easypay.**
-
-Symptom: after `docker compose up -d [--build] easypay-service`, *every* payment returns 500 —
-including plain `Send-Payment -Amount 40000`, which has nothing to do with the `POS-02` bug — and the
-body carries a `requestId`:
-
-```text
-HTTP 500
-
-{
-  "timestamp": "2026-07-31T13:45:00.175+00:00",
-  "path": "/api/easypay/payments",
-  "status": 500,
-  "error": "Internal Server Error",
-  "requestId": "7939aa55-1401"
-}
-```
-
-🛠️ **Confirm it is the gateway and not your service** — all three of these pass while payments still
-fail:
-
-```powershell
-docker compose ps easypay-service                                    # Up ... (healthy)
-docker compose logs --tail=50 easypay-service | Select-String "PaymentResource"   # nothing: no request arrived
-docker compose exec api-gateway sh -c "curl -s -o /dev/null -w '%{http_code}' http://easypay-service:8080/actuator/health"
-```
-
-That last command returned `200` in the session this was captured in, and
-`docker compose exec api-gateway getent hosts easypay-service` resolved the **correct, current** IP.
-Network fine, DNS fine, easypay fine — and still 500.
-
-**Why.** `api-gateway` routes straight to `http://easypay-service:8080` (no `lb://`, no Eureka), and
-Spring Cloud Gateway pools its outbound connections. Recreating the easypay container hands it a
-**new IP**; the gateway keeps reusing pooled connections to the address that no longer exists and
-turns the resulting I/O error into a 500 of its own making.
-
-🛠️ **Fix — restart the gateway:**
-
-```powershell
-docker compose restart api-gateway
-Send-Payment -Amount 40000    # ACCEPTED
-```
-
-Verified: `HTTP 500` immediately before the restart, `ACCEPTED / STANDARD / bankCalled True`
-immediately after.
-
-⚠️ It is **intermittent**, which is what makes it so confusing. Docker often reuses the same IP for
-the recreated container, and then nothing goes wrong — several rebuilds in a row work fine, then one
-does not. If a rebuild suddenly breaks *everything*, restart the gateway before you suspect your edit.
-
-### A rebuild silently did nothing (your change is not there)
-
-`docker compose up -d --build easypay-service` prints `Container easypay-service Started` even when
-the **image build failed**. Compose reports the container it left running — the *old* one. Your change
-is not deployed, the logs look normal, and nothing says "build error" unless you scroll.
-
-🛠️ **Check what is actually running:**
-
-```powershell
-docker inspect easypay-service --format "started={{.State.StartedAt}}"
-```
-
-If that timestamp predates your edit, the build failed. Get the real reason:
-
-```powershell
-docker compose build easypay-service --progress=plain 2>&1 | Select-String "error:|What went wrong" -Context 0,6
-```
-
-A Java mistake surfaces as:
-
-```text
-> Compilation failed; see the compiler error output for details.
-BUILD FAILED in 7s
-ERROR: process "/bin/sh -c ./gradlew :easypay-service:clean :easypay-service:build -x test" did not complete successfully: exit code: 1
-```
-
-⚠️ **Compile before you deploy** and this never bites you:
-
-```powershell
-.\gradlew.bat :easypay-service:compileJava
-```
-
-It takes ~5 s against a warm Gradle cache and gives you file-and-line errors instead of a Docker
-build log.
-
-### The first payment after a restart fails, or returns `AMOUNT_EXCEEDED`
-
-Two different symptoms, one cause: **you were faster than the stack.** Both are normal within the
-first minute after `docker compose up`, and neither means you broke anything.
-
-**Symptom A — no HTTP response at all:**
-
-```text
-HTTP 0
-The response ended prematurely. (ResponseEnded)
-```
-
-`HTTP 0` is the helper reporting "no status code arrived". The gateway accepted your TCP connection
-and closed it before answering, because it (or easypay behind it) was still booting. Spring Boot
-reports the moment it is genuinely ready:
-
-```powershell
-docker compose logs api-gateway | Select-String "Netty started|Started ApiGatewayApplication"
-```
-
-**Symptom B — a valid response with the wrong code:**
-
-```text
-responseCode   : AMOUNT_EXCEEDED
-processingMode : FALLBACK
-bankCalled     : False
-```
-
-The bank was never called. `easypay` resolves `smartbank-gateway` through **Eureka**
-(`@FeignClient("SMARTBANK-GATEWAY")`), and Eureka registration lags container startup by up to a
-minute — so easypay's load-balancer cache is briefly empty. Confirm it in the logs:
-
-```powershell
-docker compose logs easypay-service | Select-String "No servers available|Accept by delegation"
-```
-
-You will see the retry pattern, three attempts one and two seconds apart, then the fallback:
-
-```text
-No servers available for service: SMARTBANK-GATEWAY
-Exception while requesting bank, operation will be retried or fallback: Connection refused ...
-Accept by delegation. Error was: Connection refused executing POST http://SMARTBANK-GATEWAY/authors/authorize
-```
-
-**Fix for both:** wait until all five instances are `UP`, then send the payment again.
-
-```powershell
-$r = Invoke-RestMethod -Uri 'http://localhost:8761/eureka/apps' -Headers @{Accept='application/json'}
-$r.applications.application | ForEach-Object { "$($_.name) : $($_.instance.status)" }
-Send-Payment -Amount 25000    # expect ACCEPTED, bankCalled True, processingMode STANDARD
-```
-
-👀 **This is worth stopping on for a moment.** You just hit the exact failure the workshop is built to
-teach: the response said `AMOUNT_EXCEEDED`, which reads as *"the customer asked for too much money"*,
-while the real cause was *service discovery not ready*. Nothing in the response body hints at that,
-and the HTTP status was still **201 Created**. Chapter 2 gets you the `WARN` lines above; Chapter 4
-shows you the failed calls and the retries in one picture.
-
-⚠️ If it still returns `AMOUNT_EXCEEDED` after a couple of minutes, then the bank really is
-unreachable — check `docker compose ps smartbank-gateway`, and remember that amounts **below** `20000`
-are still accepted in `FALLBACK` mode, so `Send-Payment -Amount 15000` returning `ACCEPTED` does not
-prove the bank is back.
 
 ### No data in Grafana
 
