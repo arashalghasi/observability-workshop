@@ -1,6 +1,9 @@
 # Workshop helpers for sending payments through the api-gateway.
 # Load in a session with:   . .\scripts\payment-helpers.ps1
-# Load in every session:    Add-Content $PROFILE ". `"$PWD\scripts\payment-helpers.ps1`""
+# Load in every session:    New-Item -ItemType Directory -Force (Split-Path $PROFILE) | Out-Null
+#                            Add-Content $PROFILE ". `"$PWD\scripts\payment-helpers.ps1`""
+#                            (the New-Item is needed if no profile exists yet: Add-Content will not
+#                             create the Documents\PowerShell directory, only the file)
 
 function Send-Payment {
     param(
