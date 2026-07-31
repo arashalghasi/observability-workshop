@@ -55,6 +55,12 @@ dependencies {
     // Spring Boot Management and Monitoring
     implementation("org.springframework.boot:spring-boot-starter-actuator")
 
+    // OpenTelemetry API: custom business metrics
+    implementation("io.opentelemetry:opentelemetry-api")
+
+    // OpenTelemetry annotations: custom spans (@WithSpan / @SpanAttribute)
+    implementation("io.opentelemetry.instrumentation:opentelemetry-instrumentation-annotations")
+
     testImplementation("org.springframework.boot:spring-boot-starter-test")
     testImplementation("org.testcontainers:postgresql")
 }

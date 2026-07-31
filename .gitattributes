@@ -1,0 +1,29 @@
+# Normalize all text files to LF in the repository.
+#
+# Why this matters here: `gradlew` and every `*.sh` in this repo are executed
+# *inside Linux containers* (the service Dockerfiles run `./gradlew`, and the
+# grafana/pyroscope images COPY + exec their entrypoint.sh). If a Windows
+# checkout gives them CRLF, the shebang becomes `#!/bin/sh\r` and the build
+# fails with the misleading `/bin/sh: ./gradlew: not found` (exit 127).
+* text=auto eol=lf
+
+# Scripts that must keep CRLF because Windows interpreters need it.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Explicit: these are executed in Linux containers, always LF.
+gradlew text eol=lf
+*.sh text eol=lf
+
+# Binaries git should never touch.
+*.jar binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.zip binary
+*.gz binary

@@ -22,6 +22,10 @@ management:
       exposure:
         include: "*"
 
+logging:
+  pattern:
+    level: "%5p [%mdc]"
+
 spring:
   application:
     name: easypay-service
