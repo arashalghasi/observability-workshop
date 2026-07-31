@@ -133,50 +133,64 @@ See [Sending payments](#sending-payments) for the design notes and a `curl.exe` 
 
 ## Status of this checkout
 
-The exercises are edits *you* make to the application, so a working copy drifts from upstream as you
-progress. Read this table before you start: it tells you which chapters are already done for you and
-which ones you still have to type.
+**This checkout is a clean slate.** Every exercise is yours to type — nothing is pre-applied, and
+`easypay-service` is completely uninstrumented, exactly as the workshop intends. That is the
+`init status` commit; if you ever want to get back here, see [Starting over](#starting-over).
 
-The split is not random. Everything **outside** `src/main/java` — Compose, the collector config, the
-build file — is already applied. Every edit **inside** the Java sources is still waiting for you.
+| Step | What you will add | Where |
+| --- | --- | --- |
+| 2.2 | uncomment the `LOG.*` statements | `easypay-service/.../payment/boundary/PaymentResource.java` |
+| 2.3 | wrap `isActive()` in `try/catch (NullPointerException)` + `LOG.warn` | `easypay-service/.../payment/control/PosValidator.java` |
+| 2.4 | `MDC.put`/`MDC.clear()` in `processPayment()`, plus `logging.pattern.level: "%5p [%mdc]"` | same `PaymentResource.java`, `easypay-service/src/main/resources/application.yaml` |
+| 2.5 | *(optional)* structured console format | `application.yaml` |
+| 2.6 | `-javaagent`, both `logback-appender` properties, three `OTEL_*` env vars | `compose.yml` |
+| 2.8 | `redaction/card-numbers` processor on the `logs` pipeline | `docker/otelcol/otelcol.yaml` |
+| 3.1 | `-Dotel.metric.export.interval=5000` | `compose.yml` |
+| 3.5 | `io.opentelemetry:opentelemetry-api` dependency, then two `LongHistogram` + one `LongCounter` | `easypay-service/build.gradle.kts`, `easypay-service/.../payment/control/PaymentService.java` |
+| 4.2 | `tail_sampling/actuator` processor on the `traces` pipeline | `docker/otelcol/otelcol.yaml` |
+| 4.3 | `opentelemetry-instrumentation-annotations` dependency, then `@WithSpan` + `@SpanAttribute` on `process`/`store` | same two files |
+| 6.2 | 11 `PYROSCOPE_*`/`OTEL_PYROSCOPE_*`/`OTEL_JAVAAGENT_EXTENSIONS` env vars, `-javaagent:/pyroscope.jar` | `compose.yml` |
 
-| Step | Change | Where | State here |
-| --- | --- | --- | --- |
-| 2.2 | uncomment the `LOG.*` statements | `easypay-service/.../payment/boundary/PaymentResource.java` | ⬜ **you do this** — still commented out |
-| 2.3 | wrap `isActive()` in `try/catch (NullPointerException)` + `LOG.warn` | `easypay-service/.../payment/control/PosValidator.java` | ⬜ **you do this** — no `try/catch` yet |
-| 2.4 | `MDC.put`/`MDC.clear()` in `processPayment()` | same `PaymentResource.java` | ⬜ **you do this** — still commented out |
-| 2.4 | `logging.pattern.level: "%5p [%mdc]"` | `easypay-service/src/main/resources/application.yaml` | ✅ already applied |
-| 2.6 | `-javaagent`, both `logback-appender` properties, three `OTEL_*` env vars | `compose.yml` | ✅ already applied |
-| 2.8 | `redaction/card-numbers` processor on the `logs` pipeline | `docker/otelcol/otelcol.yaml` | ✅ already applied |
-| 3.1 | `-Dotel.metric.export.interval=5000` | `compose.yml` | ✅ already applied |
-| 3.5 | `io.opentelemetry:opentelemetry-api` dependency | `easypay-service/build.gradle.kts` | ✅ already applied |
-| 3.5 | two `LongHistogram` + one `LongCounter` | `easypay-service/.../payment/control/PaymentService.java` | ⬜ **you do this** — no meters yet |
-| 4.2 | `tail_sampling/actuator` processor on the `traces` pipeline | `docker/otelcol/otelcol.yaml` | ✅ already applied |
-| 4.3 | `opentelemetry-instrumentation-annotations` dependency | `easypay-service/build.gradle.kts` | ✅ already applied (upstream docs claim this is pre-added; in a *fresh clone* it is not — here it is) |
-| 4.3 | `@WithSpan` + `@SpanAttribute` on `process`/`store` | `easypay-service/.../payment/control/PaymentService.java` | ⬜ **you do this** — not annotated yet |
-| 6.2 | 11 `PYROSCOPE_*`/`OTEL_PYROSCOPE_*`/`OTEL_JAVAAGENT_EXTENSIONS` env vars, `-javaagent:/pyroscope.jar` | `compose.yml` | ✅ already applied |
+Only the *jars* are pre-provided: `easypay-service/src/main/docker/Dockerfile` already `ADD`s
+`opentelemetry-javaagent.jar`, `pyroscope.jar` and `pyroscope-otel.jar` into the image. Attaching them
+is 2.6 and 6.2 — your job.
 
-**2.5 is skipped on purpose** (masking the card number in the application's own logs). Two things are
-worth knowing about that, because the guide used to state it imprecisely:
-
-- `PaymentRequest.toString()` **already** prints `cardNumber='****'`, so the log line from 2.2
-  (`LOG.info("Processing new payment: {}", paymentRequest)`) never leaks the PAN.
-- The leak comes from **2.4**: `MDC.put("cardNumber", …)` puts the raw number in the MDC, and
-  `%mdc` prints the whole map, so it lands in `docker compose logs easypay-service`. Grafana shows
-  `****` anyway because 2.8 redacts at the collector — the collector protects the backend, not your
-  terminal.
-
-**Verify the table yourself** rather than trusting it — one command per claim:
+**Check your own progress at any time**, rather than trusting any table:
 
 ```powershell
-git status --short                                   # empty for a file => that file is at upstream state
+git status --short          # which files you have changed so far
+git diff --stat             # how much
 Select-String -Path easypay-service\src\main\java\com\worldline\easypay\payment\boundary\PaymentResource.java -Pattern "// LOG\.|// MDC\."
-Select-String -Path easypay-service\src\main\java\com\worldline\easypay\payment\control\PaymentService.java -Pattern "LongHistogram|WithSpan"
 Select-String -Path compose.yml -Pattern "javaagent|otel.metric.export.interval"
 ```
 
-The first `Select-String` printing matches means 2.2/2.4 are **not** applied yet. The second printing
-nothing means 3.5/4.3 are **not** applied yet. `git diff` is the final source of truth.
+At the clean slate, the first `Select-String` prints **10 commented lines** and the second prints
+**nothing**. As you work through the chapters those flip over.
+
+### Starting over
+
+To throw away your exercise edits and return to this state:
+
+```powershell
+git stash                                              # or: git checkout -- <files you edited>
+docker compose down -v --remove-orphans                # drop containers and DB volumes
+docker compose up -d --build --remove-orphans          # rebuild from the clean sources
+```
+
+⚠️ Reverting the files is not enough on its own — the *running containers* still carry the old build.
+Anything you changed in `compose.yml` or a `.java` file needs
+`docker compose up -d --build easypay-service` before the running system matches your sources again.
+
+### A note on 2.5 and where the card number actually leaks
+
+Worth knowing before you start, because it is easy to state imprecisely:
+
+- `PaymentRequest.toString()` **already** prints `cardNumber='****'`, so the log line you enable in
+  2.2 (`LOG.info("Processing new payment: {}", paymentRequest)`) never leaks the PAN.
+- The leak arrives with **2.4**: `MDC.put("cardNumber", …)` stores the raw number and `%mdc` prints the
+  whole map, so it reaches `docker compose logs easypay-service`.
+- **2.8** redacts at the collector, so Grafana shows `****` — but your terminal still does not. The
+  collector protects the backend, not your console. Masking in the application (2.5) is the other half.
 
 ---
 
@@ -323,7 +337,8 @@ k6 run -u 1 -d 5m k6/01-payment-only.js    # Tempo needs 1-2 min before traces s
 docker compose up -d --build opentelemetry-collector
 ```
 
-📝 **[4.3](#43-custom-spans) annotate `process`/`store` with `@WithSpan` + `@SpanAttribute`.**
+📝 **[4.3](#43-custom-spans) add the `opentelemetry-instrumentation-annotations` dependency, then
+annotate `process`/`store` with `@WithSpan` + `@SpanAttribute`.**
 
 ```powershell
 docker compose up -d --build easypay-service
@@ -723,8 +738,8 @@ authorizes up to `40000` and denies above it.
 > [MDC](OBSERVABILITY-101.md#mdc), [PII](OBSERVABILITY-101.md#pii)) and
 > [How the Java agent works](OBSERVABILITY-101.md#how-the-java-agent-works).
 >
-> ⚠️ Steps 2.2, 2.3 and the Java half of 2.4 are **not** applied in this checkout — you type them.
-> See [Status of this checkout](#status-of-this-checkout).
+> ⚠️ Nothing in this chapter is pre-applied — every edit is yours to make. See
+> [Status of this checkout](#status-of-this-checkout).
 
 ### 2.1 Some functional issues
 
@@ -1156,8 +1171,8 @@ docker compose up -d --build opentelemetry-collector
 > [why not averages](OBSERVABILITY-101.md#why-not-averages),
 > [cardinality](OBSERVABILITY-101.md#cardinality) — the one that gets juniors fired from a Prometheus.
 >
-> ⚠️ The `opentelemetry-api` dependency is already in `build.gradle.kts` here; the meters in
-> `PaymentService` are not. You write those.
+> ⚠️ 3.5 is two edits, not one: the `opentelemetry-api` dependency in `build.gradle.kts` **and** the
+> meters in `PaymentService`. Neither is pre-applied here.
 
 Goal: collect metrics and forward them to Prometheus, again through the collector.
 
